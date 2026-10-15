@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Panel operativo para seguimiento de garantías, repuestos y turnos." />
+    <title>Toyota Garantías | Centro operativo</title>
+    <script>
+      (() => {
+        const isLocal = ['127.0.0.1', 'localhost'].includes(window.location.hostname);
+        if (!isLocal) return;
+
+        const canonicalLocalUrl = 'http://127.0.0.1:5173/';
+        if (window.location.hostname === 'localhost' || window.location.port !== '5173') {
+          window.location.replace(canonicalLocalUrl);
+          return;
+        }
+
+        if (window.location.pathname !== '/' || window.location.search || window.location.hash) {
+          window.history.replaceState(null, '', '/');
+        }
+      })();
+    </script>
+    <script>document.documentElement.classList.add('app-booting')</script>
+    <link rel="stylesheet" href="styles.css?v=20260921-bloqueo-registro" />
+    <link rel="stylesheet" href="precision.css?v=20260918-turn-date-visible" />
+</head>
+  <body class="auth-locked">
+    <div class="app-boot-screen" id="appBootScreen" role="status" aria-live="polite" aria-label="Validando acceso">
+      <div class="app-boot-brand">
+        <img src="assets/logo-amiun.png" alt="Amiun Toyota" />
+        <span>GARANTÍAS Y POSTVENTA</span>
+      </div>
+      <div class="app-boot-progress" aria-hidden="true"><i></i></div>
+      <p>Preparando el centro operativo</p>
+    </div>
+    <main class="login-screen" id="loginScreen" aria-labelledby="loginTitle">
+      <section class="login-panel">
+        <div class="login-brand">
+          <img src="assets/logo-amiun.png" alt="Amiun Toyota" />
+          <span>GARANTÍAS Y POSTVENTA</span>
+        </div>
+        <div class="login-copy">
+          <span class="login-kicker">ACCESO INTERNO</span>
+          <h1 id="loginTitle">Ingresar al centro operativo</h1>
+          <p>Utilizá tu cuenta autorizada para acceder a casos, repuestos y turnos.</p>
+        </div>
+        <form class="login-form" id="loginForm" novalidate>
+          <label for="loginUsername">Usuario</label>
+          <input id="loginUsername" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required />
+          <label for="loginPassword">Contraseña</label>
+          <div class="login-password-field">
+            <input id="loginPassword" name="password" type="password" autocomplete="current-password" inputmode="numeric" required />
+            <button id="toggleLoginPassword" type="button" aria-label="Mostrar contraseña">Mostrar</button>
+          </div>
+          <p class="login-error" id="loginError" role="alert" aria-live="polite"></p>
+          <button class="login-submit" type="submit">Ingresar</button>
+        </form>
+        <footer><span>AMIUN TOYOTA</span><small>Sistema de gestión interna</small></footer>
+      </section>
+      <aside class="login-context" aria-hidden="true">
+        <div><span>01</span><strong>Seguimiento trazable</strong><small>Cada caso dentro de un circuito operativo único.</small></div>
+        <div><span>02</span><strong>Decisiones visibles</strong><small>Prioridades, demoras y bloqueos en el momento correcto.</small></div>
+        <div><span>03</span><strong>Acceso controlado</strong><small>Información reservada para personal autorizado.</small></div>
+      </aside>
+    </main>
+
+    <div class="app-shell" id="appShell" hidden>
+      <aside class="sidebar" id="sidebar">
+        <div class="brand">
+          <img class="brand-logo brand-logo-light" src="assets/logo-amiun.png" alt="Amiun" />
+          <img class="brand-logo brand-logo-dark" src="assets/logo-amiun-blanco.png" alt="Amiun" />
+        </div>
+        <nav id="navigation" aria-label="Vistas de garantías"></nav>
+        <button class="user-card" id="logoutButton" type="button" title="Cerrar sesión" aria-label="Cerrar sesión">
+          <span class="avatar">FN</span>
+          <span><strong>Fneyra</strong><small>Administrador</small></span>
+          <span class="user-logout-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false">
+              <path d="M13 4.5v-.75A1.75 1.75 0 0 0 11.25 2h-6.5A1.75 1.75 0 0 0 3 3.75v16.5A1.75 1.75 0 0 0 4.75 22h6.5A1.75 1.75 0 0 0 13 20.25v-.75"></path>
+              <path d="M9 12h12"></path>
+              <path d="m18 9 3 3-3 3"></path>
+            </svg>
+          </span>
+        </button>
+      </aside>
+
+      <main>
+        <header class="topbar">
+          <button class="icon-button menu-toggle" id="menuButton" aria-label="Compactar menú" aria-controls="sidebar" aria-expanded="true" title="Compactar menú">☰</button>
+          <div class="page-context"><span id="breadcrumb">Garantías / General</span><strong id="currentSection">Resumen</strong></div>
+          <label class="search-box">
+            <span aria-hidden="true">⌕</span>
+            <input id="globalSearch" type="search" placeholder="Buscar por orden, patente o cliente" />
+            <kbd>⌘ K</kbd>
+          </label>
+          <div class="top-actions">
+            <div class="top-datetime" id="topDatetime" aria-label="Fecha y hora actual">
+              <span id="topDate"></span>
+              <strong id="topTime"></strong>
+            </div>
+            <button class="icon-button theme-toggle" id="themeToggle" aria-label="Cambiar a modo noche" title="Cambiar tema">☾</button>
+            <div class="pending-alert-control" id="pendingAlertControl">
+              <button class="icon-button pending-alert-button" id="pendingAlertButton" type="button" aria-label="Revisar alertas operativas" aria-expanded="false" aria-controls="pendingAlertPanel" title="Alertas operativas">
+                <span class="pending-alert-bell" aria-hidden="true">🔔</span>
+                <span class="pending-alert-count" id="pendingAlertCount" hidden>0</span>
+              </button>
+              <section class="pending-alert-panel" id="pendingAlertPanel" aria-label="Alertas operativas" hidden>
+                <header>
+                  <div><span>CONTROL OPERATIVO</span><strong>Pendientes por resolver</strong></div>
+                  <output id="pendingAlertTotal" aria-live="polite">0</output>
+                </header>
+                <p class="pending-alert-intro">Cada circuito se muestra por separado para evitar confusiones.</p>
+                <div class="pending-alert-list" id="pendingAlertList"></div>
+              </section>
+            </div>
+            <button class="primary-button" id="newCaseButton"><span>＋</span> Nuevo caso</button>
+          </div>
+        </header>
+
+        <div class="page" id="page"></div>
+      </main>
+    </div>
+
+    <div class="modal-backdrop" id="modalBackdrop" hidden>
+      <section class="modal case-entry-modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+        <header><div><span class="eyebrow">NUEVA GARANTÍA</span><h2 id="modalTitle">Registrar un caso</h2></div><div class="modal-header-actions"><label class="vor-compact"><input type="checkbox" name="vor" form="caseForm" /> <span>Caso VOR</span></label><button class="icon-button" id="closeModal" aria-label="Cerrar">×</button></div></header>
+        <form id="caseForm" class="case-entry-form">
+          <p class="required-fields-note" id="caseFormRequiredNote"><span aria-hidden="true">*</span> Todos los campos son obligatorios.</p>
+          <div class="case-entry-sections">
+            <section class="case-entry-section">
+              <header><b>01</b><span><strong>Identificación del caso</strong><small>Datos para localizar la orden y el vehículo</small></span></header>
+              <div class="form-grid case-entry-grid identity-grid">
+                <label><span>VIN <b class="required-mark" aria-hidden="true">*</b></span><input name="vin" maxlength="17" required aria-describedby="caseFormRequiredNote" placeholder="Ej. 8A1ABCD1234567890" /></label>
+                <label><span>NRO OR <b class="required-mark" aria-hidden="true">*</b></span><input name="order" required aria-describedby="caseFormRequiredNote" placeholder="Ej. OR-2491" /></label>
+                <label><span>Patente <b class="required-mark" aria-hidden="true">*</b></span><input name="plate" required aria-describedby="caseFormRequiredNote" placeholder="Ej. AF 482 QZ" /></label>
+              </div>
+            </section>
+            <section class="case-entry-section">
+              <header><b>02</b><span><strong>Cliente y cobertura</strong><small>Contacto y datos básicos para la evaluación</small></span></header>
+              <div class="form-grid case-entry-grid customer-grid">
+                <label class="customer-name"><span>Cliente <b class="required-mark" aria-hidden="true">*</b></span><input name="client" required aria-describedby="caseFormRequiredNote" placeholder="Nombre completo" /></label>
+                <label><span>Teléfono <b class="required-mark" aria-hidden="true">*</b></span><input name="phone" required aria-describedby="caseFormRequiredNote" placeholder="11 5555 0123" /></label>
+                <label><span>Fecha de venta <b class="required-mark" aria-hidden="true">*</b></span><input name="saleDate" type="date" required aria-describedby="caseFormRequiredNote" /></label>
+                <label><span>KM <b class="required-mark" aria-hidden="true">*</b></span><input name="km" type="number" min="0" step="1" inputmode="numeric" required aria-describedby="caseFormRequiredNote" placeholder="Ej. 45000" /></label>
+                <label><span>Prioridad <b class="required-mark" aria-hidden="true">*</b></span><select name="priority" required aria-describedby="caseFormRequiredNote"><option>Normal</option><option>Alta</option><option>Urgente</option></select></label>
+              </div>
+            </section>
+            <section class="case-entry-section work-section">
+              <header><b>03</b><span><strong>Trabajo solicitado</strong><small>Alcance inicial informado por Garantías</small></span></header>
+              <div class="parts-routing-note"><span aria-hidden="true">RP</span><p><strong>El código se completa en Repuestos</strong>Después de crear el caso, ingresalo desde la ficha operativa de Repuestos.</p></div>
+              <div class="form-grid case-entry-grid work-grid">
+                <label><span>Tiempo de reparación <b class="required-mark" aria-hidden="true">*</b></span><input name="repairTime" required aria-describedby="caseFormRequiredNote" placeholder="Ej. 2 horas" /></label>
+                <label><span>Descripción del repuesto <b class="required-mark" aria-hidden="true">*</b></span><textarea name="part" rows="3" required aria-describedby="caseFormRequiredNote" placeholder="Descripción breve"></textarea></label>
+                <label><span>Observaciones <b class="required-mark" aria-hidden="true">*</b></span><textarea name="observations" rows="3" required aria-describedby="caseFormRequiredNote" placeholder="Información relevante"></textarea></label>
+              </div>
+            </section>
+          </div>
+          <p class="form-error" id="formError" role="alert"></p>
+          <footer><button class="secondary-button" type="button" id="cancelModal">Cancelar</button><button class="primary-button" type="submit">Guardar caso</button></footer>
+        </form>
+      </section>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="assets/supabase.js?v=20260821-realtime"></script>
+<script src="recovery-case-records.js?v=20261015"></script>
+<script src="app.js?v=20261015-recovery-local"></script>
+</body>
+</html>
+
+
+
+
+

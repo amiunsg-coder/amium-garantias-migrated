@@ -1,0 +1,26 @@
+# Dependencias y datos locales
+node_modules/
+outputs/
+.spreadsheet-work-*/
+repuestos-induccion/
+*.xlsx
+*.ndjson
+case_records_migrated.csv
+recovery-case-records.json
+recovery-case-records.js
+BASE_DE_DATOS_ACTIVOS.json
+base-datos-activos-seed.js
+supabase-backup-*.xlsx
+supabase_export_builder.mjs
+.codex-local-server.cjs
+_debug_*.ps1
+_spec_preview.txt
+tools/
+.env
+.env.*
+!.env.example
+.agents/
+.codex/
+.vercel/
+.supabase/
+*.log
