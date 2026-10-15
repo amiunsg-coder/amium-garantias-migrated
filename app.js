@@ -4005,3 +4005,35 @@ body[data-theme='dark'] #settings-panel-password .password-settings-form select,
 `;
   document.head.appendChild(style);
 })();
+
+                                            
+/* Mantener los nombres del selector sin identificadores técnicos al re-renderizar. */
+(()=>{
+  const cleanUserOptionLabels=()=>{
+    const select=document.getElementById('passwordTargetUser');
+    if(!select)return;
+    [...select.options].forEach(option=>{
+      const raw=option.textContent.trim();
+      const name=raw.split(' · ')[0].trim();
+      const inactive=/ · Inactivo$/.test(raw);
+      const visible=name+(inactive?' · Inactivo':'');
+      if(name&&raw!==visible)option.textContent=visible;
+    });
+  };
+  const watchPanel=()=>{
+    const panel=document.getElementById('settings-panel-password');
+    if(!panel)return;
+    cleanUserOptionLabels();
+    if(panel.dataset.userLabelObserver)return;
+    const observer=new MutationObserver(cleanUserOptionLabels);
+    observer.observe(panel,{childList:true,subtree:true,characterData:true});
+    panel.dataset.userLabelObserver='1';
+  };
+  const previousRender=render;
+  render=function(){
+    const result=previousRender.apply(this,arguments);
+    setTimeout(watchPanel,0);
+    return result;
+  };
+  setTimeout(watchPanel,0);
+})();
