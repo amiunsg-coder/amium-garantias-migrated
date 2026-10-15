@@ -3730,3 +3730,15 @@ todayAppointmentsView=function(){
   render=function(){const result=originalRender.apply(this,arguments);setTimeout(addPasswordSettings,0);return result};
   setTimeout(addPasswordSettings,0);
 })();
+/* Ajuste de visibilidad del panel de contraseña. */
+(()=>{
+  const syncPasswordPanelVisibility=()=>{
+    if(typeof currentView!=='undefined'&&currentView==='settings'){
+      const panel=document.getElementById('settings-panel-password');
+      if(panel)panel.hidden=typeof settingsPanel==='undefined'||settingsPanel!=='password';
+    }
+  };
+  const previousRender=render;
+  render=function(){const result=previousRender.apply(this,arguments);setTimeout(syncPasswordPanelVisibility,0);return result};
+  setTimeout(syncPasswordPanelVisibility,0);
+})();
