@@ -3754,3 +3754,98 @@ todayAppointmentsView=function(){
   const bindPanel=async()=>{if(typeof currentView==='undefined'||currentView!=='settings')return;const panel=document.getElementById('settings-panel-password');if(!panel)return;const users=remoteUsers.length?remoteUsers:localUsers();panel.innerHTML=panelMarkup(users);panel.hidden=typeof settingsPanel==='undefined'||settingsPanel!=='password';const select=panel.querySelector('#passwordTargetUser');select.onchange=()=>{selectedUser=select.value;bindPanel()};const form=panel.querySelector('#changePasswordForm'),errorBox=panel.querySelector('.password-settings-error'),submit=form.querySelector('[type=submit]');form.onsubmit=async event=>{event.preventDefault();if(!canModifyView('settings')){toast('No tenés permiso para cambiar contraseñas.');return}const data=new FormData(form),targetUsername=String(data.get('targetUsername')||selectedUser||'').trim().toLowerCase(),newPassword=String(data.get('newPassword')||''),confirmPassword=String(data.get('confirmPassword')||'');errorBox.textContent='';if(!targetUsername){errorBox.textContent='Elegí un usuario.';return}if(newPassword.length<4){errorBox.textContent='La nueva contraseña debe tener al menos 4 caracteres.';return}if(newPassword!==confirmPassword){errorBox.textContent='Las nuevas contraseñas no coinciden.';return}submit.disabled=true;submit.textContent='Guardando…';try{if(amiunSupabaseClient){const response=await fetch(AMIUN_SUPABASE_URL+'/rest/v1/rpc/admin_reset_app_password',{method:'POST',headers:amiunSupabaseRestHeaders,body:JSON.stringify({p_target_username:targetUsername,p_new_password:newPassword})});const body=await response.json().catch(()=>null);if(!response.ok||body!==true)throw new Error(body?.message||'No se pudo cambiar la contraseña de ese usuario.')}else{const user=APPLICATION_USERS[targetUsername];if(!user)throw new Error('El usuario seleccionado no existe.');user.passwordHash=await credentialHash(newPassword)}form.reset();selectedUser=targetUsername;toast('Contraseña de '+(APPLICATION_USERS[targetUsername]?.displayName||targetUsername)+' actualizada correctamente.')}catch(error){errorBox.textContent=error?.message||'No se pudo actualizar la contraseña.'}finally{submit.disabled=false;submit.textContent='Guardar contraseña'}};if(!remoteUsers.length&&amiunSupabaseClient){await loadUsers();if(remoteUsers.length)bindPanel()}};
   const previousRender=render;render=function(){const result=previousRender.apply(this,arguments);setTimeout(bindPanel,0);return result};setTimeout(bindPanel,0);
 })();
+
+                                            /* Pulido del selector de usuarios y del formulario de contraseñas. */
+(()=>{
+  const styleId='admin-password-form-polish';
+  const ensureStyles=()=>{
+    if(document.getElementById(styleId))return;
+    const style=document.createElement('style');
+    style.id=styleId;
+    style.textContent=`
+#settings-panel-password .password-settings-form{
+  display:grid;
+  grid-template-columns:minmax(220px,1fr) minmax(220px,1fr);
+  gap:20px 24px;
+  margin-top:24px;
+}
+#settings-panel-password .password-settings-form label{
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  min-width:0;
+}
+#settings-panel-password .password-settings-form label:first-child{
+  grid-column:1 / -1;
+}
+#settings-panel-password .password-settings-form label > span{
+  color:#5f6670;
+  font-size:11px;
+  font-weight:800;
+  letter-spacing:.08em;
+}
+#settings-panel-password .password-settings-form select,
+#settings-panel-password .password-settings-form input{
+  width:100%;
+  min-height:44px;
+  box-sizing:border-box;
+  border:1px solid #ccd1d8;
+  border-radius:6px;
+  background:#fff;
+  color:#17191c;
+  padding:0 12px;
+  font:inherit;
+}
+#settings-panel-password .password-settings-form select:focus,
+#settings-panel-password .password-settings-form input:focus{
+  outline:2px solid rgba(235,10,30,.18);
+  border-color:#eb0a1e;
+}
+#settings-panel-password .password-settings-form small{
+  color:#737b85;
+  font-size:12px;
+  line-height:1.35;
+}
+#settings-panel-password .password-settings-form .password-settings-error{
+  grid-column:1 / -1;
+  min-height:20px;
+  margin:0;
+  color:#c72a35;
+}
+#settings-panel-password .password-settings-form footer{
+  grid-column:1 / -1;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:20px;
+  padding-top:4px;
+  color:#69717b;
+  font-size:13px;
+}
+@media (max-width:760px){
+  #settings-panel-password .password-settings-form{grid-template-columns:1fr}
+  #settings-panel-password .password-settings-form label:first-child,
+  #settings-panel-password .password-settings-form .password-settings-error,
+  #settings-panel-password .password-settings-form footer{grid-column:1}
+  #settings-panel-password .password-settings-form footer{align-items:stretch;flex-direction:column}
+}
+`;
+    document.head.appendChild(style);
+  };
+  const cleanUserOptionLabels=()=>{
+    const select=document.getElementById('passwordTargetUser');
+    if(!select)return;
+    [...select.options].forEach(option=>{
+      const label=option.textContent.split(' · ')[0].trim();
+      if(label)option.textContent=label;
+    });
+  };
+  const previousRender=render;
+  render=function(){
+    const result=previousRender.apply(this,arguments);
+    setTimeout(()=>{ensureStyles();cleanUserOptionLabels()},0);
+    return result;
+  };
+  ensureStyles();
+  setTimeout(cleanUserOptionLabels,0);
+})();
