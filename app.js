@@ -3681,3 +3681,11 @@ todayAppointmentsView=function(){
 
                                                                                                             
                                                                                                             // Vista previa compatible c
+/* Cambio de contraseña del usuario actual: sin correo y sin Supabase Auth en el frontend. */
+(()=>{
+  const styleId='amiun-password-settings-styles';
+  const ensureStyles=()=>{
+    if(document.getElementById(styleId))return;
+    const style=document.createElement('style');
+    style.id=styleId;
+    style.textContent='.password-settings{border-top:3px solid #eb0a1e}.password-settings-form{display:grid;gap:18px;padding:24px}.password-settings-form label{display:grid;gap:7px;color:#5f6670;font-size:11px;font-weight:800;letter-spacing:.06em}.password-settings-form input{width:100%;min-height:44px;border:1px solid #d7dbe0;border-radius:6px;padding:0 12px;background:#fff;color:#17191c;font:inherit;letter-spacing:normal}.password-settings-form small{color:#747b84;font-size:12px;font-weight:500;letter-spacing:normal}.password-settings-form footer{display:flex;
