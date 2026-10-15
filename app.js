@@ -3849,3 +3849,159 @@ todayAppointmentsView=function(){
   ensureStyles();
   setTimeout(cleanUserOptionLabels,0);
 })();
+
+
+/* Refinamiento visual del panel de contraseñas. */
+(()=>{
+  const styleId='admin-password-form-refinement-v2';
+  if(document.getElementById(styleId))return;
+  const style=document.createElement('style');
+  style.id=styleId;
+  style.textContent=`
+#settings-panel-password{
+  overflow:hidden;
+  border:1px solid #d8dde4;
+  border-top:4px solid #df2f2f;
+  border-radius:10px;
+  background:#fff;
+  box-shadow:0 10px 28px rgba(22,29,37,.06);
+}
+#settings-panel-password>header{
+  padding:28px 32px 24px;
+  background:linear-gradient(180deg,#fff 0%,#fbfcfd 100%);
+  border-bottom:1px solid #e3e7ec;
+}
+#settings-panel-password>header h2{
+  margin:5px 0 7px;
+  color:#181b1f;
+  font-size:28px;
+  line-height:1.08;
+  letter-spacing:-.025em;
+}
+#settings-panel-password>header p{
+  max-width:760px;
+  margin:0;
+  color:#68717d;
+  font-size:14px;
+  line-height:1.5;
+}
+#settings-panel-password>header .parts-email-status{
+  border-color:#d7dce3;
+  border-radius:999px;
+  background:#fff;
+  padding:9px 14px;
+  color:#58616d;
+  font-size:11px;
+  letter-spacing:.06em;
+}
+#settings-panel-password .password-settings-form{
+  align-content:start;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:16px;
+  margin:0;
+  padding:22px 32px 24px;
+  background:#f7f8fa;
+}
+#settings-panel-password .password-settings-form label{
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  min-width:0;
+  padding:16px;
+  border:1px solid #e0e4e9;
+  border-radius:8px;
+  background:#fff;
+  box-shadow:0 2px 7px rgba(22,29,37,.035);
+}
+#settings-panel-password .password-settings-form label:first-child{
+  display:grid;
+  grid-column:1 / -1;
+  grid-template-columns:132px minmax(0,1fr);
+  column-gap:18px;
+  align-items:center;
+}
+#settings-panel-password .password-settings-form label:first-child>span{grid-row:1 / span 2;align-self:center}
+#settings-panel-password .password-settings-form label:first-child small{grid-column:2}
+#settings-panel-password .password-settings-form label>span{
+  color:#59626e;
+  font-size:11px;
+  font-weight:850;
+  letter-spacing:.08em;
+}
+#settings-panel-password .password-settings-form select,
+#settings-panel-password .password-settings-form input{
+  width:100%;
+  min-height:46px;
+  box-sizing:border-box;
+  border:1px solid #cbd2da;
+  border-radius:6px;
+  background:#fff;
+  color:#17191c;
+  padding:0 13px;
+  font:inherit;
+  transition:border-color .16s ease,box-shadow .16s ease,background .16s ease;
+}
+#settings-panel-password .password-settings-form select{font-weight:650;cursor:pointer}
+#settings-panel-password .password-settings-form select:focus,
+#settings-panel-password .password-settings-form input:focus{
+  border-color:#df2f2f;
+  outline:0;
+  box-shadow:0 0 0 4px rgba(223,47,47,.11);
+}
+#settings-panel-password .password-settings-form label small{
+  margin:0;
+  color:#7a838e;
+  font-size:12px;
+  line-height:1.4;
+}
+#settings-panel-password .password-settings-form .password-settings-error{
+  grid-column:1 / -1;
+  min-height:0;
+  margin:0;
+  color:#bd2020;
+  font-size:12px;
+}
+#settings-panel-password .password-settings-form .password-settings-error:empty{display:none}
+#settings-panel-password .password-settings-form footer{
+  grid-column:1 / -1;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:20px;
+  margin-top:2px;
+  padding:18px 0 0;
+  border-top:1px solid #e1e5ea;
+  color:#68717d;
+  font-size:12px;
+  line-height:1.45;
+}
+#settings-panel-password .password-settings-form footer span{max-width:540px}
+#settings-panel-password .password-settings-form footer .primary-button{
+  min-height:44px;
+  padding:0 22px;
+  border-radius:6px;
+  box-shadow:0 4px 10px rgba(223,47,47,.16);
+  white-space:nowrap;
+}
+body[data-theme='dark'] #settings-panel-password{background:#17191c;border-color:#343a41}
+body[data-theme='dark'] #settings-panel-password>header{background:linear-gradient(180deg,#1b1f23 0%,#17191c 100%);border-color:#343a41}
+body[data-theme='dark'] #settings-panel-password>header h2{color:#f3f4f5}
+body[data-theme='dark'] #settings-panel-password>header p,body[data-theme='dark'] #settings-panel-password .password-settings-form footer{color:#a8b0ba}
+body[data-theme='dark'] #settings-panel-password .password-settings-form{background:#111417}
+body[data-theme='dark'] #settings-panel-password .password-settings-form label{background:#1b1f23;border-color:#343a41}
+body[data-theme='dark'] #settings-panel-password .password-settings-form select,body[data-theme='dark'] #settings-panel-password .password-settings-form input{background:#17191c;color:#f3f4f5;border-color:#4a525c}
+@media (max-width:760px){
+  #settings-panel-password>header{padding:22px 20px 20px}
+  #settings-panel-password>header .parts-email-status{margin-top:16px;display:inline-flex}
+  #settings-panel-password .password-settings-form{grid-template-columns:1fr;padding:18px 20px 20px}
+  #settings-panel-password .password-settings-form label:first-child{display:flex;grid-column:1;gap:8px}
+  #settings-panel-password .password-settings-form label:first-child>span{grid-row:auto}
+  #settings-panel-password .password-settings-form label:first-child small{grid-column:auto}
+  #settings-panel-password .password-settings-form .password-settings-error,
+  #settings-panel-password .password-settings-form footer{grid-column:1}
+  #settings-panel-password .password-settings-form footer{align-items:stretch;flex-direction:column}
+  #settings-panel-password .password-settings-form footer .primary-button{width:100%}
+}
+`;
+  document.head.appendChild(style);
+})();
