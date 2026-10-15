@@ -3678,3 +3678,6 @@ todayAppointmentsView=function(){
 
 
 
+
+                                                                                                            
+                                                                                                            // Vista previa compatible c
