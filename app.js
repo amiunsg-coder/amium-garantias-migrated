@@ -209,7 +209,8 @@ const loadStoredArray = (key,fallback) => {
 const amiunSupabaseRestHeaders = {
   apikey: AMIUN_SUPABASE_PUBLISHABLE_KEY,
   Authorization: 'Bearer ' + AMIUN_SUPABASE_PUBLISHABLE_KEY,
-  'Content-Type': 'application/json'
+  'Content-Type': 'application/json',
+  'X-Amiun-Session': ''
 };
 const splitEmailAddresses=value=>String(value||'').split(/[;,\n]+/).map(item=>item.trim().toLowerCase()).filter(Boolean);
 const validEmailAddress=value=>/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value||'').trim());
@@ -226,22 +227,18 @@ const loadPartsOrderEmailSettings=()=>{
 };
 let partsOrderEmailSettings=loadPartsOrderEmailSettings();
 const amiunSupabaseClient = !AMIUN_LOCAL_DEMO_MODE && Boolean(AMIUN_SUPABASE_URL && AMIUN_SUPABASE_PUBLISHABLE_KEY);
-// La aplicación muestra un usuario corto (inicial + apellido), pero Supabase
-// Auth usa un correo técnico interno que nunca se expone en la interfaz.
-const amiunSupabaseAuthClient = amiunSupabaseClient && window.supabase?.createClient
-  ? window.supabase.createClient(AMIUN_SUPABASE_URL,AMIUN_SUPABASE_PUBLISHABLE_KEY,{
-      auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:false}
-    })
-  : null;
-const amiunSupabaseRealtimeClient = amiunSupabaseClient && window.supabase?.createClient
-  ? window.supabase.createClient(AMIUN_SUPABASE_URL,AMIUN_SUPABASE_PUBLISHABLE_KEY,{
-      auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false}
-    })
-  : null;
-function updateAmiunRestAuthorization(session){
-  amiunSupabaseRestHeaders.Authorization = `Bearer ${session?.access_token || AMIUN_SUPABASE_PUBLISHABLE_KEY}`;
+// La aplicación usa una sesión propia. No expone correos ni depende de Supabase Auth.
+let amiunCustomSessionToken = sessionStorage.getItem('amiun-app-session-token') || '';
+amiunSupabaseRestHeaders['X-Amiun-Session'] = amiunCustomSessionToken;
+const amiunSupabaseAuthClient = null;
+const amiunSupabaseRealtimeClient = null;
+function updateAmiunRestAuthorization(token){
+  amiunSupabaseRestHeaders.Authorization = `Bearer ${AMIUN_SUPABASE_PUBLISHABLE_KEY}`;
+  amiunCustomSessionToken = typeof token === 'string' ? token : '';
+  amiunSupabaseRestHeaders['X-Amiun-Session'] = amiunCustomSessionToken;
+  if(amiunCustomSessionToken)sessionStorage.setItem('amiun-app-session-token',amiunCustomSessionToken);
+  else sessionStorage.removeItem('amiun-app-session-token');
 }
-amiunSupabaseAuthClient?.auth.onAuthStateChange((_event,session)=>updateAmiunRestAuthorization(session));
 let amiunRemoteSyncReady = false;
 let amiunRemotePullBusy = false;
 let amiunRemoteSyncTimer = 0;
@@ -3189,20 +3186,25 @@ toggleLoginPassword.onclick=()=>{const reveal=loginPassword.type==='password';lo
 async function authenticateApplicationUser(username,password){
   const user=APPLICATION_USERS[username];
   if(!user||user.active===false)return {user:null,error:null};
-  if(!amiunSupabaseAuthClient){
+  if(!amiunSupabaseClient){
     const passwordHash=await credentialHash(password);
     return {user:passwordHash===user.passwordHash?user:null,error:null};
   }
-  const {data,error}=await amiunSupabaseAuthClient.auth.signInWithPassword({email:`${username}@amiun.com.ar`,password});
-  if(error||!data?.session)return {user:null,error:error||new Error('No se recibió una sesión de Supabase Auth')};
-  updateAmiunRestAuthorization(data.session);
+  const response=await fetch(`${AMIUN_SUPABASE_URL}/rest/v1/rpc/authenticate_app_user`,{
+    method:'POST',
+    headers:{...amiunSupabaseRestHeaders,'X-Amiun-Session':''},
+    body:JSON.stringify({p_username:username,p_password:password})
+  });
+  const data=await response.json().catch(()=>null);
+  if(!response.ok||!data?.token)return {user:null,error:new Error(data?.message||'invalid credentials')};
+  updateAmiunRestAuthorization(data.token);
   return {user,error:null};
 }
 loginForm.onsubmit=async event=>{event.preventDefault();const submit=loginForm.querySelector('[type="submit"]'),now=Date.now();if(now<loginBlockedUntil){loginError.textContent=`Demasiados intentos. Esperá ${Math.ceil((loginBlockedUntil-now)/1000)} segundos.`;return}submit.disabled=true;loginError.textContent='Verificando acceso…';try{const username=loginUsername.value.trim().toLowerCase(),{user,error}=await authenticateApplicationUser(username,loginPassword.value);if(user){loginAttempts=0;unlockApplication(user.username);return}loginAttempts+=1;loginPassword.value='';if(loginAttempts>=5){loginBlockedUntil=Date.now()+30000;loginAttempts=0;loginError.textContent='Acceso bloqueado durante 30 segundos por intentos fallidos.'}else{loginError.textContent=error?.message?.toLowerCase().includes('invalid login credentials')?`Usuario o contraseña incorrectos. Intento ${loginAttempts} de 5.`:`No se pudo validar el acceso. Intento ${loginAttempts} de 5.`;loginPassword.focus()}}catch(error){console.error('[Acceso] No se pudo validar la credencial',error);loginError.textContent='No se pudo validar el acceso. Volvé a intentarlo.'}finally{submit.disabled=false}};
-logoutButton.onclick=async()=>{releaseCaseLock();if(amiunSupabaseAuthClient)await amiunSupabaseAuthClient.auth.signOut();lockApplication()};
+logoutButton.onclick=async()=>{releaseCaseLock();if(amiunSupabaseClient&&amiunCustomSessionToken){await fetch(`${AMIUN_SUPABASE_URL}/rest/v1/rpc/logout_app_user`,{method:'POST',headers:amiunSupabaseRestHeaders}).catch(()=>{})}lockApplication()};
 const storedSessionUser=sessionStorage.getItem(AUTH_SESSION_KEY);
-if(APPLICATION_USERS[storedSessionUser]&&amiunSupabaseAuthClient){
-  amiunSupabaseAuthClient.auth.getSession().then(({data})=>{if(data?.session){updateAmiunRestAuthorization(data.session);unlockApplication(storedSessionUser)}else lockApplication()}).catch(()=>lockApplication());
+if(APPLICATION_USERS[storedSessionUser]&&amiunSupabaseClient&&amiunCustomSessionToken){
+  fetch(`${AMIUN_SUPABASE_URL}/rest/v1/rpc/get_app_session_user`,{headers:amiunSupabaseRestHeaders}).then(response=>response.ok?response.json():null).then(data=>{if(data?.username===storedSessionUser)unlockApplication(storedSessionUser);else lockApplication()}).catch(()=>lockApplication());
 }else if(APPLICATION_USERS[storedSessionUser])unlockApplication(storedSessionUser);else lockApplication();
 function applySidebarState(collapsed){appShell.classList.toggle('sidebar-collapsed',collapsed);menuButton.setAttribute('aria-label',collapsed?'Expandir menú':'Compactar menú');menuButton.setAttribute('aria-expanded',String(!collapsed));menuButton.title=collapsed?'Expandir menú':'Compactar menú';localStorage.setItem('warranty-sidebar-collapsed',collapsed?'1':'0')}
 applySidebarState(localStorage.getItem('warranty-sidebar-collapsed')==='1');
