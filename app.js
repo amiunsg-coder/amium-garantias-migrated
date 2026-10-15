@@ -226,11 +226,22 @@ const loadPartsOrderEmailSettings=()=>{
 };
 let partsOrderEmailSettings=loadPartsOrderEmailSettings();
 const amiunSupabaseClient = !AMIUN_LOCAL_DEMO_MODE && Boolean(AMIUN_SUPABASE_URL && AMIUN_SUPABASE_PUBLISHABLE_KEY);
+// La aplicación muestra un usuario corto (inicial + apellido), pero Supabase
+// Auth usa un correo técnico interno que nunca se expone en la interfaz.
+const amiunSupabaseAuthClient = amiunSupabaseClient && window.supabase?.createClient
+  ? window.supabase.createClient(AMIUN_SUPABASE_URL,AMIUN_SUPABASE_PUBLISHABLE_KEY,{
+      auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:false}
+    })
+  : null;
 const amiunSupabaseRealtimeClient = amiunSupabaseClient && window.supabase?.createClient
   ? window.supabase.createClient(AMIUN_SUPABASE_URL,AMIUN_SUPABASE_PUBLISHABLE_KEY,{
       auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false}
     })
   : null;
+function updateAmiunRestAuthorization(session){
+  amiunSupabaseRestHeaders.Authorization = `Bearer ${session?.access_token || AMIUN_SUPABASE_PUBLISHABLE_KEY}`;
+}
+amiunSupabaseAuthClient?.auth.onAuthStateChange((_event,session)=>updateAmiunRestAuthorization(session));
 let amiunRemoteSyncReady = false;
 let amiunRemotePullBusy = false;
 let amiunRemoteSyncTimer = 0;
@@ -3173,12 +3184,26 @@ let loginAttempts=0,loginBlockedUntil=0;
 function finishApplicationBoot(){document.documentElement.classList.remove('app-booting');document.getElementById('appBootScreen')?.setAttribute('hidden','')}
 async function credentialHash(value){const data=new TextEncoder().encode(value),digest=await crypto.subtle.digest('SHA-256',data);return [...new Uint8Array(digest)].map(byte=>byte.toString(16).padStart(2,'0')).join('')}
 function unlockApplication(username){const user=APPLICATION_USERS[username];if(!user||user.active===false){lockApplication();return}sessionStorage.setItem(AUTH_SESSION_KEY,user.username);if(!canAccessView(currentView,user))currentView=defaultViewForCurrentUser(user);loginScreen.hidden=true;appShell.hidden=false;document.body.classList.remove('auth-locked');loginError.textContent='';loginForm.reset();updateSessionIdentity(user);startSharedCasesSync();render();finishApplicationBoot();setTimeout(()=>{document.getElementById('globalSearch')?.focus();checkDueReminderAlerts()},0)}
-function lockApplication(){sessionStorage.removeItem(AUTH_SESSION_KEY);appShell.hidden=true;loginScreen.hidden=false;document.body.classList.add('auth-locked');loginForm.reset();loginError.textContent='';toggleLoginPassword.textContent='Mostrar';toggleLoginPassword.setAttribute('aria-label','Mostrar contraseña');loginPassword.type='password';finishApplicationBoot();setTimeout(()=>loginUsername.focus(),0)}
+function lockApplication(){sessionStorage.removeItem(AUTH_SESSION_KEY);updateAmiunRestAuthorization(null);appShell.hidden=true;loginScreen.hidden=false;document.body.classList.add('auth-locked');loginForm.reset();loginError.textContent='';toggleLoginPassword.textContent='Mostrar';toggleLoginPassword.setAttribute('aria-label','Mostrar contraseña');loginPassword.type='password';finishApplicationBoot();setTimeout(()=>loginUsername.focus(),0)}
 toggleLoginPassword.onclick=()=>{const reveal=loginPassword.type==='password';loginPassword.type=reveal?'text':'password';toggleLoginPassword.textContent=reveal?'Ocultar':'Mostrar';toggleLoginPassword.setAttribute('aria-label',reveal?'Ocultar contraseña':'Mostrar contraseña')};
-loginForm.onsubmit=async event=>{event.preventDefault();const submit=loginForm.querySelector('[type="submit"]'),now=Date.now();if(now<loginBlockedUntil){loginError.textContent=`Demasiados intentos. Esperá ${Math.ceil((loginBlockedUntil-now)/1000)} segundos.`;return}submit.disabled=true;loginError.textContent='Verificando acceso…';try{const username=loginUsername.value.trim().toLowerCase(),passwordHash=await credentialHash(loginPassword.value),user=APPLICATION_USERS[username];if(user&&user.active!==false&&passwordHash===user.passwordHash){loginAttempts=0;unlockApplication(user.username);return}loginAttempts+=1;loginPassword.value='';if(loginAttempts>=5){loginBlockedUntil=Date.now()+30000;loginAttempts=0;loginError.textContent='Acceso bloqueado durante 30 segundos por intentos fallidos.'}else{loginError.textContent=`Usuario o contraseña incorrectos. Intento ${loginAttempts} de 5.`;loginPassword.focus()}}catch(error){console.error('[Acceso] No se pudo validar la credencial',error);loginError.textContent='No se pudo validar el acceso. Volvé a intentarlo.'}finally{submit.disabled=false}};
-logoutButton.onclick=()=>{releaseCaseLock();lockApplication()};
+async function authenticateApplicationUser(username,password){
+  const user=APPLICATION_USERS[username];
+  if(!user||user.active===false)return {user:null,error:null};
+  if(!amiunSupabaseAuthClient){
+    const passwordHash=await credentialHash(password);
+    return {user:passwordHash===user.passwordHash?user:null,error:null};
+  }
+  const {data,error}=await amiunSupabaseAuthClient.auth.signInWithPassword({email:`${username}@amiun.com.ar`,password});
+  if(error||!data?.session)return {user:null,error:error||new Error('No se recibió una sesión de Supabase Auth')};
+  updateAmiunRestAuthorization(data.session);
+  return {user,error:null};
+}
+loginForm.onsubmit=async event=>{event.preventDefault();const submit=loginForm.querySelector('[type="submit"]'),now=Date.now();if(now<loginBlockedUntil){loginError.textContent=`Demasiados intentos. Esperá ${Math.ceil((loginBlockedUntil-now)/1000)} segundos.`;return}submit.disabled=true;loginError.textContent='Verificando acceso…';try{const username=loginUsername.value.trim().toLowerCase(),{user,error}=await authenticateApplicationUser(username,loginPassword.value);if(user){loginAttempts=0;unlockApplication(user.username);return}loginAttempts+=1;loginPassword.value='';if(loginAttempts>=5){loginBlockedUntil=Date.now()+30000;loginAttempts=0;loginError.textContent='Acceso bloqueado durante 30 segundos por intentos fallidos.'}else{loginError.textContent=error?.message?.toLowerCase().includes('invalid login credentials')?`Usuario o contraseña incorrectos. Intento ${loginAttempts} de 5.`:`No se pudo validar el acceso. Intento ${loginAttempts} de 5.`;loginPassword.focus()}}catch(error){console.error('[Acceso] No se pudo validar la credencial',error);loginError.textContent='No se pudo validar el acceso. Volvé a intentarlo.'}finally{submit.disabled=false}};
+logoutButton.onclick=async()=>{releaseCaseLock();if(amiunSupabaseAuthClient)await amiunSupabaseAuthClient.auth.signOut();lockApplication()};
 const storedSessionUser=sessionStorage.getItem(AUTH_SESSION_KEY);
-if(APPLICATION_USERS[storedSessionUser])unlockApplication(storedSessionUser);else lockApplication();
+if(APPLICATION_USERS[storedSessionUser]&&amiunSupabaseAuthClient){
+  amiunSupabaseAuthClient.auth.getSession().then(({data})=>{if(data?.session){updateAmiunRestAuthorization(data.session);unlockApplication(storedSessionUser)}else lockApplication()}).catch(()=>lockApplication());
+}else if(APPLICATION_USERS[storedSessionUser])unlockApplication(storedSessionUser);else lockApplication();
 function applySidebarState(collapsed){appShell.classList.toggle('sidebar-collapsed',collapsed);menuButton.setAttribute('aria-label',collapsed?'Expandir menú':'Compactar menú');menuButton.setAttribute('aria-expanded',String(!collapsed));menuButton.title=collapsed?'Expandir menú':'Compactar menú';localStorage.setItem('warranty-sidebar-collapsed',collapsed?'1':'0')}
 applySidebarState(localStorage.getItem('warranty-sidebar-collapsed')==='1');
 document.getElementById('newCaseButton').onclick=openModal;document.getElementById('closeModal').onclick=closeModal;document.getElementById('cancelModal').onclick=closeModal;modal.onclick=e=>{if(e.target===modal)closeModal()};menuButton.onclick=()=>{if(window.matchMedia('(max-width: 760px)').matches){document.getElementById('sidebar').classList.toggle('open')}else{applySidebarState(!appShell.classList.contains('sidebar-collapsed'))}};
