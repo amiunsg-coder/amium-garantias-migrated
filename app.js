@@ -3681,11 +3681,52 @@ todayAppointmentsView=function(){
 
                                                                                                             
                                                                                                             // Vista previa compatible c
-/* Cambio de contraseña del usuario actual: sin correo y sin Supabase Auth en el frontend. */
+
+/* Cambio de contraseña del usuario actual. */
 (()=>{
-  const styleId='amiun-password-settings-styles';
-  const ensureStyles=()=>{
-    if(document.getElementById(styleId))return;
-    const style=document.createElement('style');
-    style.id=styleId;
-    style.textContent='.password-settings{border-top:3px solid #eb0a1e}.password-settings-form{display:grid;gap:18px;padding:24px}.password-settings-form label{display:grid;gap:7px;color:#5f6670;font-size:11px;font-weight:800;letter-spacing:.06em}.password-settings-form input{width:100%;min-height:44px;border:1px solid #d7dbe0;border-radius:6px;padding:0 12px;background:#fff;color:#17191c;font:inherit;letter-spacing:normal}.password-settings-form small{color:#747b84;font-size:12px;font-weight:500;letter-spacing:normal}.password-settings-form footer{display:flex;
+  const addPasswordSettings=()=>{
+    if(typeof currentView==='undefined'||currentView!=='settings')return;
+    const nav=document.querySelector('.settings-nav-list');
+    const panels=document.querySelector('.settings-panels');
+    if(!nav||!panels)return;
+    if(!nav.querySelector('[data-settings-panel="password"]')){
+      nav.insertAdjacentHTML('beforeend','<button type="button" class="settings-nav-item" data-settings-panel="password" aria-controls="settings-panel-password" aria-expanded="false"><span class="settings-nav-icon" aria-hidden="true">CL</span><span><strong>Mi contraseña</strong><small>Cambiar acceso</small></span><span class="settings-nav-arrow" aria-hidden="true">›</span></button>');
+    }
+    let panel=document.getElementById('settings-panel-password');
+    if(!panel){
+      panel=document.createElement('section');
+      panel.id='settings-panel-password';
+      panel.className='settings-panel parts-email-settings';
+      panel.setAttribute('aria-labelledby','passwordSettingsTitle');
+      const username=typeof currentApplicationUser==='function'?(currentApplicationUser()?.username||''):'';
+      panel.innerHTML='<header><div><span class="action-kicker">Acceso personal</span><h2 id="passwordSettingsTitle">Cambiar contraseña</h2><p>Actualizá la contraseña del usuario <strong>'+escapeHtml(username)+'</strong> sin correos ni restablecimientos externos.</p></div><span class="parts-email-status"><i aria-hidden="true"></i>Sesión protegida</span></header><form class="parts-email-settings-form" data-password-form autocomplete="off"><label><span>CONTRASEÑA ACTUAL</span><input name="currentPassword" type="password" autocomplete="current-password" minlength="4" required></label><label><span>NUEVA CONTRASEÑA</span><input name="newPassword" type="password" autocomplete="new-password" minlength="4" required><small>Usá al menos 4 caracteres.</small></label><label><span>REPETIR NUEVA CONTRASEÑA</span><input name="confirmPassword" type="password" autocomplete="new-password" minlength="4" required></label><p class="parts-email-settings-error" role="alert" aria-live="assertive"></p><footer><div>La contraseña se guarda como hash y nunca se muestra.</div><button class="primary-button" type="submit">Cambiar contraseña</button></footer></form>';
+      panels.appendChild(panel);
+    }
+    if(!panel.dataset.bound){
+      const form=panel.querySelector('[data-password-form]');
+      const errorBox=panel.querySelector('.parts-email-settings-error');
+      const submit=form.querySelector('[type="submit"]');
+      form.onsubmit=async event=>{
+        event.preventDefault();
+        const data=new FormData(form),currentPassword=String(data.get('currentPassword')||''),newPassword=String(data.get('newPassword')||''),confirmPassword=String(data.get('confirmPassword')||'');
+        errorBox.textContent='';
+        if(newPassword.length<4){errorBox.textContent='La nueva contraseña debe tener al menos 4 caracteres.';return}
+        if(newPassword!==confirmPassword){errorBox.textContent='Las nuevas contraseñas no coinciden.';return}
+        submit.disabled=true;submit.textContent='Guardando…';
+        try{
+          const response=await fetch(AMIUN_SUPABASE_URL+'/rest/v1/rpc/change_app_password',{method:'POST',headers:amiunSupabaseRestHeaders,body:JSON.stringify({p_current_password:currentPassword,p_new_password:newPassword})});
+          const body=await response.json().catch(()=>null);
+          if(!response.ok||body!==true)throw new Error(body?.message||'La contraseña actual no es correcta o no se pudo guardar.');
+          form.reset();
+          toast('Contraseña actualizada correctamente.');
+        }catch(error){errorBox.textContent=error?.message||'No se pudo actualizar la contraseña.'}
+        finally{submit.disabled=false;submit.textContent='Cambiar contraseña'}
+      };
+      panel.dataset.bound='1';
+    }
+    if(typeof bindSettings==='function')bindSettings();
+  };
+  const originalRender=render;
+  render=function(){const result=originalRender.apply(this,arguments);setTimeout(addPasswordSettings,0);return result};
+  setTimeout(addPasswordSettings,0);
+})();
