@@ -26,6 +26,7 @@ const NEW_CASE_NOTIFICATION_ENDPOINT = window.AMIUN_NEW_CASE_NOTIFICATION_ENDPOI
 const NEW_CASE_NOTIFICATION_TIMEOUT = 30000;
 const PARTS_ORDER_EMAIL_SETTINGS_KEY = 'amiun-parts-order-email-settings-v1';
 const PARTS_ORDER_EMAIL_REMOTE_KEY = 'parts-order-email-settings';
+const USER_DIRECTORY_REMOTE_KEY = 'user-directory';
 const REGISTRY_RESPONSIBLES_KEY = 'amiun-registry-responsibles-v1';
 const MANUAL_PARTS_REGISTRY_KEY = 'parts-registry-manual';
 const AMIUN_LOCAL_DEMO_MODE = window.location.protocol === 'file:' || ['127.0.0.1','localhost'].includes(window.location.hostname);
@@ -264,6 +265,7 @@ function announceSharedDataChange(scope='all'){
   try{amiunCrossTabSyncChannel?.postMessage({scope,at:Date.now()})}catch(error){console.warn('[Sincronización] No se pudo avisar a las otras pestañas',error)}
 }
 function refreshSharedAppState(){
+  pullUserDirectory();
   pullPartsOrderEmailSettings();
   pullRegistryResponsibles();
   pullManualPartsRegistry();
@@ -719,6 +721,7 @@ async function probeRemoteChanges({force=false}={}){
 function startSharedCasesSync() {
   if(!amiunSupabaseClient || amiunRemoteSyncTimer)return;
   pullSharedCasesFromSupabase({full:true});
+  pullUserDirectory();
   pullPartsOrderEmailSettings();
   pullRegistryResponsibles();
   pullManualPartsRegistry();
@@ -732,7 +735,7 @@ function startSharedCasesSync() {
         if(status==='SUBSCRIBED')probeRemoteChanges({force:true});
       });
   }
-  amiunRemoteSyncTimer = setInterval(()=>{pullSharedCasesFromSupabase();pullPartsOrderEmailSettings();pullRegistryResponsibles();pullManualPartsRegistry();syncSharedReminders()}, AMIUN_SHARED_SYNC_INTERVAL);
+  amiunRemoteSyncTimer = setInterval(()=>{pullSharedCasesFromSupabase();pullUserDirectory();pullPartsOrderEmailSettings();pullRegistryResponsibles();pullManualPartsRegistry();syncSharedReminders()}, AMIUN_SHARED_SYNC_INTERVAL);
   amiunFastSyncTimer = setInterval(probeRemoteChanges, AMIUN_FAST_SYNC_INTERVAL);
   probeRemoteChanges();
   window.addEventListener('focus', ()=>probeRemoteChanges({force:true}));
@@ -1899,6 +1902,7 @@ function settingsView(){
       <nav class="settings-nav" aria-label="Secciones de Configuración">
         <div class="settings-nav-intro"><span class="action-kicker">PANEL DE CONTROL</span><p>Elegí una sección para mostrar solo sus opciones.</p></div>
         <div class="settings-nav-list">
+          ${menu('password','Mi contraseña','Cambiar tu acceso','CL')}
           ${menu('email','Destinatarios de pedidos','Correos de repuestos','@')}
           ${menu('registry','Responsables','Registro de repuestos','RR')}
           ${menu('permissions','Accesos por usuario','Permisos actuales','AC')}
@@ -1907,6 +1911,19 @@ function settingsView(){
         </div>
       </nav>
       <div class="settings-panels">
+    <section id="settings-panel-password" class="settings-panel password-settings" aria-labelledby="passwordSettingsTitle"${panel('password')}>
+      <header>
+        <div><span class="action-kicker">Administración de acceso</span><h2 id="passwordSettingsTitle">Contraseñas de usuarios</h2><p>Elegí el usuario al que querés asignarle una nueva contraseña. No se muestran correos ni contraseñas existentes.</p></div>
+        <span class="parts-email-status"><i aria-hidden="true"></i>Solo administrador</span>
+      </header>
+      <form id="changePasswordForm" class="password-settings-form" autocomplete="off">
+        <label><span>USUARIO</span><select id="passwordTargetUser" name="targetUsername" required>${(passwordTargetUsers.length?passwordTargetUsers:Object.values(APPLICATION_USERS).map(user=>({username:user.username,display_name:user.displayName,role:user.role,active:user.active!==false}))).map(user=>`<option value="${escapeHtml(user.username)}" ${user.username===selectedPasswordUser?'selected':''} ${user.active===false?'disabled':''}>${escapeHtml(user.display_name||user.displayName||user.username)} · ${escapeHtml(user.username)}${user.active===false?' · Inactivo':''}</option>`).join('')}</select><small>La lista se obtiene del directorio del proyecto nuevo.</small></label>
+        <label><span>NUEVA CONTRASEÑA</span><input name="newPassword" type="password" autocomplete="new-password" minlength="4" required><small>Usá al menos 8 caracteres cuando sea posible.</small></label>
+        <label><span>REPETIR NUEVA CONTRASEÑA</span><input name="confirmPassword" type="password" autocomplete="new-password" minlength="4" required></label>
+        <p class="password-settings-error" role="alert" aria-live="assertive"></p>
+        <footer><span>La contraseña se guarda como hash y nunca se muestra en la aplicación.</span><button class="primary-button" type="submit">Guardar contraseña</button></footer>
+      </form>
+    </section>
     <section id="settings-panel-email" class="settings-panel parts-email-settings" aria-labelledby="partsEmailSettingsTitle"${panel('email')}>
       <header>
         <div><span class="action-kicker">Solicitud de repuestos</span><h2 id="partsEmailSettingsTitle">Destinatarios del pedido</h2><p>Estos correos se usarán al presionar <strong>Pedir</strong> en la sección Repuestos.</p></div>
@@ -2335,6 +2352,18 @@ function highlightToyota10Fields(){
   });
 }
 function showToyota10ServiceBookReminder(reference=''){document.querySelector('.toyota10-service-reminder')?.remove();const backdrop=document.createElement('div');backdrop.className='toyota10-review-backdrop toyota10-service-reminder';backdrop.setAttribute('role','dialog');backdrop.setAttribute('aria-modal','true');backdrop.setAttribute('aria-labelledby','toyota10ServiceTitle');backdrop.innerHTML=`<section class="toyota10-review-dialog"><header><div class="toyota10-reminder-heading"><span class="toyota10-caution-icon" aria-hidden="true"><img src="assets/caution-triangle.png" alt=""></span><div><span>RECORDATORIO TOYOTA 10</span><h2 id="toyota10ServiceTitle">Llevar la libreta de servicios a Garantías</h2><p>El registro ${escapeHtml(reference||'Toyota 10')} fue guardado. Antes de finalizar la recepción, entregá la libreta de servicios del vehículo al área de Garantías.</p></div></div><button type="button" data-close-toyota10-service aria-label="Cerrar">×</button></header><div class="toyota10-review-summary"><div><span>DOCUMENTACIÓN</span><strong>Libreta de servicios</strong></div><div><span>DESTINO</span><strong>Área de Garantías</strong></div><div><span>COBERTURA</span><strong>Toyota 10</strong></div></div><footer><button class="primary-button" type="button" data-close-toyota10-service>Entendido</button></footer></section>`;document.body.appendChild(backdrop);const close=()=>backdrop.remove();backdrop.querySelectorAll('[data-close-toyota10-service]').forEach(button=>button.onclick=close);backdrop.onclick=event=>{if(event.target===backdrop)close()};backdrop.querySelector('[data-close-toyota10-service]')?.focus()}
+async function refreshPasswordTargetUsers(){
+  const select=document.getElementById('passwordTargetUser');
+  if(!select||!amiunSupabaseClient)return;
+  try{
+    const response=await fetch(`${AMIUN_SUPABASE_URL}/rest/v1/rpc/list_app_users_for_password_reset`,{headers:amiunSupabaseRestHeaders});
+    const users=await response.json().catch(()=>null);
+    if(!response.ok||!Array.isArray(users)||!users.length)return;
+    passwordTargetUsers=users;
+    if(!users.some(user=>user.username===selectedPasswordUser))selectedPasswordUser=users.find(user=>user.active!==false)?.username||users[0].username;
+    select.innerHTML=users.map(user=>`<option value="${escapeHtml(user.username)}" ${user.username===selectedPasswordUser?'selected':''} ${user.active===false?'disabled':''}>${escapeHtml(user.display_name||user.username)} · ${escapeHtml(user.username)}${user.active===false?' · Inactivo':''}</option>`).join('');
+  }catch(error){console.warn('[Contraseñas] No se pudo cargar el directorio remoto',error)}
+}
 function bindSettings(){
   const switchSettingsPanel=name=>{
     settingsPanel=name;
@@ -2346,6 +2375,35 @@ function bindSettings(){
     document.querySelectorAll('.settings-panel').forEach(panel=>{panel.hidden=panel.id!==`settings-panel-${name}`});
   };
   document.querySelectorAll('[data-settings-panel]').forEach(button=>button.onclick=()=>switchSettingsPanel(button.dataset.settingsPanel));
+  const passwordSelect=document.getElementById('passwordTargetUser');
+  if(passwordSelect)passwordSelect.onchange=()=>{selectedPasswordUser=passwordSelect.value;render()};
+  const passwordForm=document.getElementById('changePasswordForm');
+  if(passwordForm)passwordForm.onsubmit=async event=>{
+    event.preventDefault();
+    if(!canModifyView('settings')){toast('No tenés permiso para cambiar contraseñas.');return}
+    const error=passwordForm.querySelector('.password-settings-error'),button=passwordForm.querySelector('[type="submit"]'),data=new FormData(passwordForm),targetUsername=String(data.get('targetUsername')||selectedPasswordUser||'').trim().toLowerCase(),newPassword=String(data.get('newPassword')||''),confirmPassword=String(data.get('confirmPassword')||'');
+    error.textContent='';
+    if(!targetUsername){error.textContent='Elegí un usuario.';return}
+    if(newPassword.length<4){error.textContent='La nueva contraseña debe tener al menos 4 caracteres.';return}
+    if(newPassword!==confirmPassword){error.textContent='Las nuevas contraseñas no coinciden.';return}
+    button.disabled=true;button.textContent='Guardando…';
+    try{
+      if(amiunSupabaseClient){
+        const response=await fetch(`${AMIUN_SUPABASE_URL}/rest/v1/rpc/admin_reset_app_password`,{method:'POST',headers:amiunSupabaseRestHeaders,body:JSON.stringify({p_target_username:targetUsername,p_new_password:newPassword})});
+        const body=await response.json().catch(()=>null);
+        if(!response.ok||body!==true)throw new Error(body?.message||'No se pudo cambiar la contraseña de ese usuario.');
+      }else{
+        const user=APPLICATION_USERS[targetUsername];
+        if(!user)throw new Error('El usuario seleccionado no existe.');
+        user.passwordHash=await credentialHash(newPassword);
+      }
+      passwordForm.reset();
+      selectedPasswordUser=targetUsername;
+      toast(`Contraseña de ${APPLICATION_USERS[targetUsername]?.displayName||targetUsername} actualizada correctamente.`);
+    }catch(error){error.textContent=error?.message||'No se pudo actualizar la contraseña.'}
+    finally{button.disabled=false;button.textContent='Guardar contraseña'}
+  };
+  if(passwordSelect)void refreshPasswordTargetUsers();
   const clear=document.getElementById('clearAllData');if(clear)clear.onclick=clearAllData;
   const emailForm=document.getElementById('partsOrderEmailSettingsForm');if(emailForm)emailForm.onsubmit=async event=>{event.preventDefault();if(!canModifyView('settings')){toast('Tu perfil permite consultar Configuración, pero no modificar destinatarios.');return}const data=new FormData(emailForm),rawTo=splitEmailAddresses(data.get('to')),rawCc=splitEmailAddresses(data.get('cc')),invalid=[...rawTo,...rawCc].filter(address=>!validEmailAddress(address)),error=emailForm.querySelector('.parts-email-settings-error'),button=emailForm.querySelector('[type="submit"]');if(!rawTo.length){error.textContent='Ingresá al menos un destinatario para los pedidos de repuestos.';emailForm.elements.to.focus();return}if(invalid.length){error.textContent=`Revisá ${invalid.join(', ')}: no parece un correo válido.`;return}partsOrderEmailSettings=normalizePartsOrderEmailSettings({to:rawTo,cc:rawCc});error.textContent='';button.disabled=true;button.textContent='Guardando…';const shared=await pushPartsOrderEmailSettings();toast(shared?'Destinatarios de pedidos guardados':'Destinatarios guardados en este navegador; no se pudieron compartir');render()};
   const responsibleForm=document.getElementById('registryResponsiblesForm'),responsibleList=responsibleForm?.querySelector('[data-responsible-list]'),responsibleError=responsibleForm?.querySelector('.registry-responsibles-error');
@@ -2355,13 +2413,13 @@ function bindSettings(){
   const addResponsible=document.getElementById('addRegistryResponsible');if(addResponsible)addResponsible.onclick=()=>{const row=document.createElement('div');row.className='registry-responsible-row';const number=document.createElement('span'),label=document.createElement('label'),input=document.createElement('input'),remove=document.createElement('button');input.name='responsible';input.maxLength=80;input.required=true;input.placeholder='Nombre y apellido';remove.type='button';remove.dataset.removeResponsible='';remove.textContent='Quitar';label.append(input);row.append(number,label,remove);responsibleList.append(row);bindResponsibleRemove(remove);renumberResponsibleRows();input.focus()};
   if(responsibleForm)responsibleForm.onsubmit=async event=>{event.preventDefault();if(!canModifyView('settings')){toast('Tu perfil permite consultar Configuración, pero no modificar responsables.');return}const raw=new FormData(responsibleForm).getAll('responsible'),normalized=normalizeRegistryResponsibles(raw);if(!normalized.length){responsibleError.textContent='Agregá al menos un responsable antes de guardar.';responsibleForm.querySelector('input')?.focus();return}responsibleError.textContent='';const button=responsibleForm.querySelector('[type="submit"]');button.disabled=true;button.textContent='Guardando…';registryResponsibles=normalized;const shared=await pushRegistryResponsibles();toast(shared?'Responsables guardados y compartidos':'Responsables guardados en este navegador; no se pudieron compartir');render()};
   const userSelect=document.getElementById('permissionUserSelect');if(userSelect)userSelect.onchange=()=>{selectedPermissionUser=userSelect.value;render()};
-  document.querySelectorAll('[data-toggle-user]').forEach(button=>button.onclick=()=>{const username=button.dataset.toggleUser;if(username===currentApplicationUser()?.username){toast('No podés desactivar tu propio usuario.');return}APPLICATION_USERS[username].active=APPLICATION_USERS[username].active===false;persistUserDirectory();render()});
+  document.querySelectorAll('[data-toggle-user]').forEach(button=>button.onclick=async()=>{const username=button.dataset.toggleUser;if(username===currentApplicationUser()?.username){toast('No podés desactivar tu propio usuario.');return}APPLICATION_USERS[username].active=APPLICATION_USERS[username].active===false;APPLICATION_USERS[username].updatedAt=new Date().toISOString();const shared=await persistUserDirectory();toast(shared?'Usuario actualizado y compartido':'Usuario actualizado en este navegador; no se pudo compartir');render()});
   document.querySelectorAll('[data-edit-user]').forEach(button=>button.onclick=()=>{selectedDirectoryUser=button.dataset.editUser;render()});
   const addUser=document.getElementById('addUserDirectory');if(addUser)addUser.onclick=()=>{if(!canModifyView('settings')){toast('No tenés permiso para administrar usuarios.');return}selectedDirectoryUser='new';render()};
   const cancelUserEdit=document.getElementById('cancelUserEdit');if(cancelUserEdit)cancelUserEdit.onclick=()=>{selectedDirectoryUser='';render()};
   const closeUserEdit=document.getElementById('closeUserEdit'),userModalBackdrop=document.querySelector('[data-user-modal-backdrop]');const closeUserModal=()=>{selectedDirectoryUser='';render()};if(closeUserEdit)closeUserEdit.onclick=closeUserModal;if(userModalBackdrop)userModalBackdrop.onclick=event=>{if(event.target===userModalBackdrop)closeUserModal()};
   document.onkeydown=userModalBackdrop?event=>{if(event.key==='Escape')closeUserModal()}:null;
-  const userEditForm=document.getElementById('userDirectoryEditForm');if(userEditForm)userEditForm.onsubmit=event=>{event.preventDefault();if(!canModifyView('settings')){toast('No tenés permiso para administrar usuarios.');return}const data=new FormData(userEditForm),username=String(data.get('username')||'').trim().toLowerCase(),displayName=String(data.get('displayName')||'').trim(),role=String(data.get('role')||'').trim(),branch=String(data.get('branch')||'').trim();if(!/^[a-z0-9._-]{3,32}$/.test(username)||!displayName||!role||!USER_BRANCHES.includes(branch)){toast('Completá nombre, usuario, rol y sucursal.');return}if(selectedDirectoryUser==='new'&&APPLICATION_USERS[username]){toast('Ese usuario ya existe.');return}if(selectedDirectoryUser!=='new'&&username!==selectedDirectoryUser){toast('El nombre de usuario no se puede cambiar.');return}const initials=displayName.split(/\s+/).map(part=>part[0]).join('').slice(0,2).toUpperCase();if(selectedDirectoryUser==='new')APPLICATION_USERS[username]={username,displayName,role,branch,initials,passwordHash:PARTS_LOGIN_HASH,allowedViews:null,active:true};else Object.assign(APPLICATION_USERS[username],{displayName,role,branch,initials});persistUserDirectory();selectedDirectoryUser='';toast(`Usuario ${displayName} guardado`);render()};
+  const userEditForm=document.getElementById('userDirectoryEditForm');if(userEditForm)userEditForm.onsubmit=async event=>{event.preventDefault();if(!canModifyView('settings')){toast('No tenés permiso para administrar usuarios.');return}const data=new FormData(userEditForm),username=String(data.get('username')||'').trim().toLowerCase(),displayName=String(data.get('displayName')||'').trim(),role=String(data.get('role')||'').trim(),branch=String(data.get('branch')||'').trim();if(!/^[a-z0-9._-]{3,32}$/.test(username)||!displayName||!role||!USER_BRANCHES.includes(branch)){toast('Completá nombre, usuario, rol y sucursal.');return}if(selectedDirectoryUser==='new'&&APPLICATION_USERS[username]){toast('Ese usuario ya existe.');return}if(selectedDirectoryUser!=='new'&&username!==selectedDirectoryUser){toast('El nombre de usuario no se puede cambiar.');return}const initials=displayName.split(/\s+/).map(part=>part[0]).join('').slice(0,2).toUpperCase(),updatedAt=new Date().toISOString();if(selectedDirectoryUser==='new')APPLICATION_USERS[username]={username,displayName,role,branch,initials,passwordHash:PARTS_LOGIN_HASH,allowedViews:null,active:true,updatedAt};else Object.assign(APPLICATION_USERS[username],{displayName,role,branch,initials,updatedAt});const shared=await persistUserDirectory();selectedDirectoryUser='';toast(shared?`Usuario ${displayName} guardado y compartido`:`Usuario ${displayName} guardado en este navegador; no se pudo compartir`);render()};
   document.querySelectorAll('[data-permission-access]').forEach(input=>input.onchange=()=>{const row=input.closest('[data-permission-row]'),modify=row?.querySelector('[data-permission-modify]'),label=input.closest('label')?.querySelector('b');if(label)label.textContent=input.checked?'Permitido':'Sin acceso';if(modify){modify.disabled=!input.checked;if(!input.checked){modify.checked=false;const modifyLabel=modify.closest('label')?.querySelector('b');if(modifyLabel)modifyLabel.textContent='Solo consulta'}}});
   document.querySelectorAll('[data-permission-modify]').forEach(input=>input.onchange=()=>{const label=input.closest('label')?.querySelector('b');if(label)label.textContent=input.checked?'Puede modificar':'Solo consulta'});
   const saveButton=document.getElementById('saveUserPermissions');if(saveButton)saveButton.onclick=()=>savePermissionsFromSettings();
@@ -2681,13 +2739,14 @@ table th,table td{text-align:center!important;vertical-align:middle!important}
 @page{size:A4 portrait!important;margin:0!important}
 @media print{html,body{margin:0!important}.toolbar{display:none!important}.report{width:auto!important;max-width:none!important;min-height:0!important;margin:0!important;padding:11mm 13mm!important;box-shadow:none!important}table th,table td{text-align:center!important;vertical-align:middle!important}}
 </style></head>`)}
-function generateDepositPdf(){const preview=window.open('','_blank');if(!preview){toast('El navegador bloqueó la vista previa de impresión');return}const html=prepareBrowserPrintHtml(buildDepositPrintHtml().replace('</style>','.overview{display:none!important}</style>'));preview.document.open();preview.document.write(html);preview.document.close();preview.focus();toast('Reporte de depósito generado con los filtros actuales')}
+function openReportPreview(html){const preview=window.open('','_blank');if(preview){preview.document.open();preview.document.write(html);preview.document.close();preview.focus();return true}const blobUrl=URL.createObjectURL(new Blob([html],{type:'text/html'}));window.location.assign(blobUrl);setTimeout(()=>URL.revokeObjectURL(blobUrl),60000);return false}
+function generateDepositPdf(){const html=prepareBrowserPrintHtml(buildDepositPrintHtml().replace('</style>','.overview{display:none!important}</style>'));openReportPreview(html);toast('Reporte de depósito generado con los filtros actuales')}
 function depositOperationalReportCss(){return `:root{--red:#EB0A1E;--ink:#17191C;--gray:#4B5563;--muted:#6B7280;--line:#DDE0E4;--soft:#F5F6F7;--green:#237B4B;--amber:#9A5B00}*{box-sizing:border-box}body{margin:0;color:var(--ink);font-family:Arial,Helvetica,sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact}.toolbar{display:flex;justify-content:flex-end;gap:8px;padding:10px 16px;background:var(--ink)}.toolbar button{padding:8px 13px;border:1px solid #555;background:#292C31;color:#FFF;font-weight:700}.toolbar .primary{background:var(--red);border-color:var(--red)}.report{width:min(790px,calc(100% - 24px));margin:16px auto;padding:10mm 11mm;background:#FFF}.report-header{display:grid;grid-template-columns:145px 1fr 135px;align-items:center;gap:12px;padding-bottom:10px;border-bottom:2px solid var(--red)}.brand img{width:130px;height:34px;object-fit:contain}.title{text-align:center}.title h1{margin:0;font-size:18pt}.title p{margin:5px 0 0;color:var(--muted);font-size:8.5pt}.issued{padding:7px 9px;border:1px solid var(--line);border-left:3px solid var(--red)}.issued span{display:block;color:var(--muted);font-size:6.5pt;font-weight:700}.issued strong{display:block;margin-top:3px;font-size:8pt}.section-label{margin:14px 0 3px;color:var(--muted);font-size:7pt;font-weight:700;letter-spacing:1px}.section-title{margin:0 0 9px;font-size:15pt}.metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-bottom:12px}.metric{position:relative;min-height:62px;padding:10px;border:1px solid var(--line)}.metric:before{content:'';position:absolute;inset:0 0 auto;height:3px;background:var(--gray)}.metric.alert:before{background:var(--red)}.metric.good:before{background:var(--green)}.metric span{display:block;color:var(--muted);font-size:6.5pt;font-weight:700}.metric strong{display:block;margin-top:5px;font-size:19pt}.detail-heading{display:flex;align-items:end;justify-content:space-between;padding-bottom:6px;border-bottom:2px solid var(--red)}.detail-heading h2{margin:0;font-size:13pt}.detail-heading p{margin:0;color:var(--muted);font-size:7pt}table{width:100%;margin-top:7px;border-collapse:collapse;table-layout:fixed}th{padding:7px 5px;background:var(--gray);color:#FFF;font-size:7pt;text-align:center}td{padding:7px 5px;border-bottom:1px solid var(--line);font-size:8pt;text-align:center;overflow-wrap:anywhere;word-break:break-word}tbody tr:nth-child(even){background:#F8F9FA}.order{font-weight:700}.status{font-size:6.5pt;font-weight:700}.pending{color:var(--red)}.daily-summary{margin-bottom:13px}.daily-summary th,.daily-summary td{font-size:7.5pt}.empty{padding:18px!important;color:var(--muted)}.report-footer{display:flex;justify-content:space-between;margin-top:14px;padding-top:6px;border-top:1px solid var(--line);color:var(--muted);font-size:6.5pt}@page{size:A4 portrait;margin:11mm}@media print{.toolbar{display:none}.report{width:auto;margin:0;padding:0}.report-header,.metrics,.detail-heading,thead,tr{break-inside:avoid}}`}
 function depositReportShell(title,subtitle,body,filename){const now=new Date(),logoUrl=new URL('assets/logo-amiun.png',location.href).href;return `<!doctype html><html lang="es"><head><meta charset="UTF-8"><title>${escapeHtml(filename)}</title><style>${depositOperationalReportCss()}</style></head><body><nav class="toolbar"><button onclick="window.close()">Cerrar</button><button class="primary" onclick="window.print()">Guardar como PDF / Imprimir</button></nav><main class="report"><header class="report-header"><div class="brand"><img src="${escapeHtml(logoUrl)}"></div><div class="title"><h1>${escapeHtml(title)}</h1><p>${escapeHtml(subtitle)} · ${escapeHtml(reportBranchCaption())}</p></div><div class="issued"><span>EMITIDO</span><strong>${reportDateTime(now)}</strong></div></header>${body}<footer class="report-footer"><span>AMIUN TOYOTA | Postventa y Garantías</span><span>Documento de gestión interna</span></footer></main></body></html>`}
 function buildDepositDailyPrintHtml(reference=selectedRegistryDate){const date=dateKey(dateOnly(reference)),items=registryRows().filter(item=>item.repairDate===date).sort((a,b)=>String(a.order).localeCompare(String(b.order))),located=items.filter(item=>['DEPÓSITO INF','DEPÓSITO SUP'].includes(item.depositStatus)).length,unclassified=items.filter(item=>!item.depositStatus).length,rows=items.map(item=>`<tr><td class="order">${escapeHtml(item.order||'-')}</td><td>${escapeHtml(item.partCode||'-')}</td><td>${escapeHtml(item.part||'Sin especificar')}</td><td><span class="status ${item.depositStatus?'':'pending'}">${escapeHtml(item.depositStatus||'SIN CLASIFICAR')}</span></td><td>${escapeHtml(item.responsible||'Sin responsable')}</td></tr>`).join(''),body=`<p class="section-label">CONTROL DIARIO</p><h2 class="section-title">Ingresos registrados en el depósito</h2><section class="metrics"><article class="metric"><span>INGRESADOS</span><strong>${items.length}</strong></article><article class="metric good"><span>UBICADOS</span><strong>${located}</strong></article><article class="metric ${unclassified?'alert':''}"><span>SIN CLASIFICAR</span><strong>${unclassified}</strong></article></section><div class="detail-heading"><h2>Detalle de ingresos</h2><p>Estado actual de cada repuesto</p></div><table><colgroup><col style="width:15%"><col style="width:20%"><col style="width:29%"><col style="width:18%"><col style="width:18%"></colgroup><thead><tr><th>N.º de orden</th><th>Código</th><th>Repuesto</th><th>Ubicación / estado</th><th>Responsable</th></tr></thead><tbody>${rows||'<tr><td class="empty" colspan="5">Sin ingresos registrados en esta fecha</td></tr>'}</tbody></table>`;return depositReportShell('Ingresos Diarios al Depósito',`Fecha operativa: ${reportDate(dateOnly(date))}`,body,`INGRESOS_DEPOSITO_${date}`)}
 function buildDepositWeeklyPrintHtml(reference=selectedRegistryDate){const range=weeklyTurnRange(reference),keys=range.days.map(dateKey),items=registryRows().filter(item=>item.repairDate&&keys.includes(item.repairDate)).sort((a,b)=>a.repairDate.localeCompare(b.repairDate)||String(a.order).localeCompare(String(b.order))),located=items.filter(item=>['DEPÓSITO INF','DEPÓSITO SUP'].includes(item.depositStatus)).length,sent=items.filter(item=>item.depositStatus==='ENVIADO A TOYOTA').length,disposed=items.filter(item=>['PÉRDIDA','TIRADA'].includes(item.depositStatus)).length,unclassified=items.filter(item=>!item.depositStatus).length,dayNames=['Lunes','Martes','Miércoles','Jueves','Viernes'],dailyRows=keys.map((key,index)=>{const list=items.filter(item=>item.repairDate===key);return `<tr><td>${dayNames[index]}</td><td>${reportDate(dateOnly(key))}</td><td>${list.length}</td><td>${list.filter(item=>['DEPÓSITO INF','DEPÓSITO SUP'].includes(item.depositStatus)).length}</td><td>${list.filter(item=>item.depositStatus==='ENVIADO A TOYOTA').length}</td><td>${list.filter(item=>!item.depositStatus).length}</td></tr>`}).join(''),detailRows=items.map(item=>`<tr><td>${reportDate(dateOnly(item.repairDate))}</td><td class="order">${escapeHtml(item.order||'-')}</td><td>${escapeHtml(item.partCode||'-')}</td><td>${escapeHtml(item.part||'Sin especificar')}</td><td><span class="status ${item.depositStatus?'':'pending'}">${escapeHtml(item.depositStatus||'SIN CLASIFICAR')}</span></td><td>${escapeHtml(item.responsible||'Sin responsable')}</td></tr>`).join(''),body=`<p class="section-label">CONTROL SEMANAL</p><h2 class="section-title">Movimientos e inventario recibido</h2><section class="metrics"><article class="metric"><span>INGRESADOS</span><strong>${items.length}</strong></article><article class="metric good"><span>UBICADOS</span><strong>${located}</strong></article><article class="metric"><span>ENVIADOS A TOYOTA</span><strong>${sent}</strong></article><article class="metric ${disposed?'alert':''}"><span>PÉRDIDA / TIRADA</span><strong>${disposed}</strong></article><article class="metric ${unclassified?'alert':''}"><span>SIN CLASIFICAR</span><strong>${unclassified}</strong></article><article class="metric"><span>DÍAS OPERATIVOS</span><strong>5</strong></article></section><div class="detail-heading"><h2>Resumen por día</h2><p>Lunes a viernes</p></div><table class="daily-summary"><thead><tr><th>Día</th><th>Fecha</th><th>Ingresados</th><th>Ubicados</th><th>Enviados</th><th>Sin clasificar</th></tr></thead><tbody>${dailyRows}</tbody></table><div class="detail-heading"><h2>Detalle semanal</h2><p>Estado actual de los movimientos</p></div><table><colgroup><col style="width:12%"><col style="width:14%"><col style="width:17%"><col style="width:25%"><col style="width:17%"><col style="width:15%"></colgroup><thead><tr><th>Fecha</th><th>N.º de orden</th><th>Código</th><th>Repuesto</th><th>Estado</th><th>Responsable</th></tr></thead><tbody>${detailRows||'<tr><td class="empty" colspan="6">Sin movimientos registrados en esta semana</td></tr>'}</tbody></table>`;return depositReportShell('Informe Semanal de Movimientos',`${reportDate(range.monday)} al ${reportDate(range.friday)}`,body,`MOVIMIENTOS_DEPOSITO_${dateKey(range.monday)}_${dateKey(range.friday)}`)}
 function buildDepositOver60PrintHtml(reference=selectedRegistryDate){const cutoff=dateOnly(reference||iso(0)),items=depositOver60Items(reference),oldest=items.length?Math.max(...items.map(item=>item.reportDays)):0,rows=items.map(item=>`<tr><td>${reportDate(dateOnly(item.repairDate))}</td><td class="late">${item.reportDays}</td><td class="order">${escapeHtml(item.order||'-')}</td><td>${escapeHtml(item.partCode||'-')}</td><td>${escapeHtml(item.part||'Sin especificar')}</td><td><span class="status ${item.reportStatus==='SIN CLASIFICAR'?'pending':''}">${escapeHtml(item.reportStatus)}</span></td><td>${escapeHtml(item.responsible||'Sin responsable')}</td></tr>`).join(''),body=`<p class="section-label">SEGUIMIENTO DE DEPÓSITO</p><h2 class="section-title">Repuestos con más de 60 días</h2><section class="metrics"><article class="metric ${items.length?'alert':''}"><span>CASOS DETECTADOS</span><strong>${items.length}</strong></article><article class="metric"><span>MAYOR ANTIGÜEDAD</span><strong>${oldest} días</strong></article><article class="metric good"><span>CRITERIO</span><strong>&gt; 60 días</strong></article></section><div class="detail-heading"><h2>Detalle de seguimiento</h2><p>No incluye TIRADA, TIRADO ni ENVIADO A TOYOTA</p></div><table><colgroup><col style="width:12%"><col style="width:9%"><col style="width:14%"><col style="width:16%"><col style="width:25%"><col style="width:13%"><col style="width:11%"></colgroup><thead><tr><th>Fecha reparación</th><th>Días</th><th>N.º de orden</th><th>Código</th><th>Repuesto</th><th>Estado</th><th>Responsable</th></tr></thead><tbody>${rows||'<tr><td class="empty" colspan="7">No hay repuestos que cumplan este criterio</td></tr>'}</tbody></table>`;return depositReportShell('Repuestos con más de 60 días',`Corte: ${reportDate(cutoff)}`,body,`DEPOSITO_MAS_DE_60_DIAS_${dateKey(cutoff)}`)}
-function openDepositOperationalReport(type,reference){if(!['daily','weekly','over60'].includes(type)){toast('El reporte seleccionado no está disponible');return}const preview=window.open('','_blank');if(!preview){toast('El navegador bloqueó la vista previa de impresión');return}const html=type==='daily'?buildDepositDailyPrintHtml(reference):type==='weekly'?buildDepositWeeklyPrintHtml(reference):buildDepositOver60PrintHtml(reference);preview.document.open();preview.document.write(prepareBrowserPrintHtml(html));preview.document.close();preview.focus();toast(type==='daily'?'Reporte de ingresos diarios generado':type==='weekly'?'Informe semanal generado':'Reporte de más de 60 días generado')}
+function openDepositOperationalReport(type,reference){if(!['daily','weekly','over60'].includes(type)){toast('El reporte seleccionado no está disponible');return}const html=type==='daily'?buildDepositDailyPrintHtml(reference):type==='weekly'?buildDepositWeeklyPrintHtml(reference):buildDepositOver60PrintHtml(reference);openReportPreview(prepareBrowserPrintHtml(html));toast(type==='daily'?'Reporte de ingresos diarios generado':type==='weekly'?'Informe semanal generado':'Reporte de más de 60 días generado')}
 function showDepositReportDialog(){
  document.querySelector('.deposit-report-backdrop')?.remove();
  const backdrop=document.createElement('div');
@@ -2773,7 +2832,7 @@ function buildExecutionWeeklyPrintHtml(reference=executionReportDate){
  return "<!doctype html><html lang='es'><head><meta charset='UTF-8'><title>REPORTE_SEMANAL_ASISTENCIA_"+dateKey(data.range.monday)+"_"+dateKey(data.range.friday)+"</title><style>"+css+"</style></head><body><nav class='toolbar'><button onclick='window.close()'>Cerrar</button><button class='primary' onclick='window.print()'>Guardar como PDF / Imprimir</button></nav><main class='report'><header class='report-header'><div class='brand'><img src='"+escapeHtml(logoUrl)+"'></div><div class='title'><h1>Reporte Semanal de Asistencia</h1><p>"+reportDate(data.range.monday)+" al "+reportDate(data.range.friday)+" · "+escapeHtml(reportBranchCaption())+" · Actualizado "+reportDate(now)+"</p></div><div class='issued'><span>EMITIDO</span><strong>"+reportDateTime(now)+"</strong></div></header><p class='section-label'>RESUMEN EJECUTIVO</p><h2>Desempeño semanal de atención</h2><section class='metrics'><article class='metric'><span>PROGRAMADAS</span><strong>"+programmed+"</strong><small>Agenda semanal</small></article><article class='metric'><span>REALIZADAS</span><strong>"+executed+"</strong><small>Con turno</small></article><article class='metric'><span>TOTAL REAL</span><strong>"+totalReal+"</strong><small>Con y sin turno</small></article><article class='metric "+(missed?'alert':'')+"'><span>NO EJECUTADAS</span><strong>"+missed+"</strong><small>Requieren análisis</small></article><article class='metric "+(pending?'alert':'')+"'><span>PENDIENTES</span><strong>"+pending+"</strong><small>Sin resultado</small></article><article class='metric'><span>SIN TURNO</span><strong>"+withoutTurn+"</strong><small>Atenciones adicionales</small></article></section><section class='charts'>"+chart('executed','Programadas vs. ejecutadas')+chart('totalReal','Programadas vs. total real')+"</section><footer class='report-footer'><span>AMIUN TOYOTA | Postventa y Garantías</span><span>Documento de gestión interna</span></footer><section class='page-break'><div class='detail-title'><h2>Indicadores por día</h2><p>Lunes a viernes</p></div><table><thead><tr><th>Día</th><th>Programadas</th><th>Ejecutadas</th><th>No ejecutadas</th><th>Pendientes</th><th>Sin turno</th><th>Total real</th><th>Cumplimiento</th></tr></thead><tbody>"+dailyRows+"<tr class='total-row'><td>TOTAL</td><td>"+programmed+"</td><td>"+executed+"</td><td>"+missed+"</td><td>"+pending+"</td><td>"+withoutTurn+"</td><td>"+totalReal+"</td><td>"+totalCompliance+"%</td></tr></tbody></table><section class='subsection'><h3>Trabajos ejecutados</h3><table><thead><tr><th>Día</th><th>Patente</th><th>Repuesto / trabajo</th><th>Origen</th><th>N.º de orden</th></tr></thead><tbody>"+(executedRows||"<tr><td class='empty' colspan='5'>Sin trabajos ejecutados</td></tr>")+"</tbody></table></section><section class='subsection'><h3>No ejecutadas reprogramadas</h3><table><thead><tr><th>Día original</th><th>Cliente</th><th>Patente</th><th>Repuesto</th><th>Nueva fecha</th></tr></thead><tbody>"+(missedRows(rescheduled)||"<tr><td class='empty' colspan='5'>Sin turnos reprogramados</td></tr>")+"</tbody></table></section><section class='subsection'><h3>No ejecutadas sin reprogramación</h3><table><thead><tr><th>Día original</th><th>Cliente</th><th>Patente</th><th>Repuesto</th><th>Situación</th></tr></thead><tbody>"+(missedRows(notRescheduled)||"<tr><td class='empty' colspan='5'>Sin turnos pendientes de reprogramación</td></tr>")+"</tbody></table></section><footer class='report-footer'><span>AMIUN TOYOTA | Postventa y Garantías</span><span>Hasta 40 registros por tabla</span></footer></section></main></body></html>";
 }
 function injectExecutionWeeklyReportControls(){if(currentView!=='today-appointments'||document.getElementById('generateExecutionWeeklyPdf'))return;const datebar=document.querySelector('.execution-datebar');if(!datebar)return;datebar.insertAdjacentHTML('beforeend',"<div class='execution-weekly-controls'><label class='execution-week-picker'><span>SEMANA</span><input id='executionReportDate' type='date' value='"+escapeHtml(executionReportDate)+"'></label><button class='primary-button' id='generateExecutionWeeklyPdf' type='button'>Generar reporte semanal</button></div>");const input=document.getElementById('executionReportDate'),button=document.getElementById('generateExecutionWeeklyPdf');input.onchange=()=>{executionReportDate=input.value||iso(0)};button.onclick=generateExecutionWeeklyPdf}
-function generateExecutionWeeklyPdf(){const preview=window.open('','_blank');if(!preview){toast('El navegador bloqueó la vista previa de impresión');return}preview.document.open();preview.document.write(prepareBrowserPrintHtml(buildExecutionWeeklyPrintHtml(executionReportDate)));preview.document.close();preview.focus();const range=weeklyTurnRange(executionReportDate);toast('Reporte de asistencia: '+reportDate(range.monday)+' al '+reportDate(range.friday))}
+function generateExecutionWeeklyPdf(){openReportPreview(prepareBrowserPrintHtml(buildExecutionWeeklyPrintHtml(executionReportDate)));const range=weeklyTurnRange(executionReportDate);toast('Reporte de asistencia: '+reportDate(range.monday)+' al '+reportDate(range.friday))}
 function weeklyTurnRange(reference=weeklyReportDate){const selected=dateOnly(reference||iso(0)),offset=(selected.getDay()+6)%7,monday=new Date(selected);monday.setDate(selected.getDate()-offset);const days=Array.from({length:5},(_,index)=>{const date=new Date(monday);date.setDate(monday.getDate()+index);return date});return {monday,friday:days[4],days}}
 function buildWeeklyTurnsPrintHtml(reference=weeklyReportDate){
  const now=new Date(),range=weeklyTurnRange(reference),dayNames=['Lunes','Martes','Miércoles','Jueves','Viernes'],keys=range.days.map(dateKey);
@@ -2792,9 +2851,9 @@ function injectWeeklyReportControls(){if(currentView!=='appointments'||document.
 function showWeeklyReportDialog(){document.querySelector('.weekly-report-backdrop')?.remove();const backdrop=document.createElement('div');backdrop.className='weekly-report-backdrop';backdrop.setAttribute('role','dialog');backdrop.setAttribute('aria-modal','true');backdrop.setAttribute('aria-labelledby','weeklyReportDialogTitle');backdrop.innerHTML=`<section class="weekly-report-dialog"><header><div><span>AGENDA DE TURNOS</span><h2 id="weeklyReportDialogTitle">Seleccionar semana</h2><p>Elegí cualquier día. El reporte tomará automáticamente de lunes a viernes.</p></div><button type="button" data-close-weekly-report aria-label="Cerrar">×</button></header><div class="weekly-report-selection"><label for="weeklyReportDialogDate">Día de referencia<input id="weeklyReportDialogDate" type="date" value="${escapeHtml(weeklyReportDate)}"></label><div><span>PERÍODO DEL REPORTE</span><strong data-weekly-period></strong></div></div><footer><button class="secondary-button" type="button" data-close-weekly-report>Cancelar</button><button class="primary-button" type="button" data-confirm-weekly-report>Generar reporte</button></footer></section>`;document.body.appendChild(backdrop);const input=backdrop.querySelector('#weeklyReportDialogDate'),period=backdrop.querySelector('[data-weekly-period]'),updatePeriod=()=>{weeklyReportDate=input.value||iso(0);const range=weeklyTurnRange(weeklyReportDate);period.textContent=`${reportDate(range.monday)} al ${reportDate(range.friday)}`},close=()=>backdrop.remove();updatePeriod();input.onchange=updatePeriod;backdrop.querySelectorAll('[data-close-weekly-report]').forEach(button=>button.onclick=close);backdrop.querySelector('[data-confirm-weekly-report]').onclick=()=>{updatePeriod();close();generateWeeklyTurnsPdf()};backdrop.onclick=event=>{if(event.target===backdrop)close()};input.focus()}
 function weeklyPortraitStyles(){return "@page{size:A4 portrait;margin:12mm 13mm}.report{width:min(780px,calc(100% - 28px));padding:11mm 12mm 9mm}.report-header{grid-template-columns:135px 1fr 128px;gap:12px}.brand img{width:122px;height:34px}.title h1{font-size:18pt}.title p{font-size:9.5pt}.issued{min-width:0;padding:7px 8px}.issued span{font-size:7pt}.issued strong{font-size:8pt}.summary{margin-top:12px}.summary h2{font-size:15pt}.metrics{grid-template-columns:repeat(5,1fr)}.metric{min-height:66px;padding:11px 9px}.metric span{font-size:7.2pt}.metric strong{font-size:20pt}.metric small{font-size:6.8pt;line-height:1.2}.focus{grid-template-columns:1fr 1fr}.focus div{padding:9px 10px}.focus div:last-child{grid-column:1/-1;border-top:1px solid var(--line);border-left:3px solid var(--red)}.focus span{font-size:7pt}.focus strong{font-size:9pt}.agenda-heading h2{font-size:14pt}.agenda-heading p{font-size:8pt}.day-block{margin-top:10px;break-inside:auto}.day-block>header{padding:8px 10px}.day-block>header span{font-size:8pt}.day-block>header strong,.day-block>header b{font-size:8.5pt}.day-block table,.day-block tbody{display:block}.day-block thead{display:none}.day-block tbody tr{display:grid;grid-template-columns:70px 86px 96px minmax(0,1fr);background:#FFF!important;break-inside:avoid;page-break-inside:avoid}.day-block tbody tr+tr{border-top:1px solid var(--line)}.day-block td{display:block;min-width:0;padding:7px 8px;border:0;font-size:8.5pt;line-height:1.28;overflow-wrap:anywhere}.day-block td:before{display:block;margin-bottom:3px;color:var(--muted);font-size:6.5pt;font-weight:700;letter-spacing:.35px}.day-block td:nth-child(1):before{content:'HORA'}.day-block td:nth-child(2):before{content:'N.º OR'}.day-block td:nth-child(3):before{content:'PATENTE'}.day-block td:nth-child(4):before{content:'CLIENTE'}.day-block td:nth-child(5):before{content:'PRIORIDAD'}.day-block td:nth-child(6):before{content:'REPUESTO'}.day-block td:nth-child(7):before{content:'TIEMPO'}.day-block td:nth-child(8):before{content:'ESTADO'}.priority,.status{font-size:7pt;padding:3px 5px}.day-block>p{font-size:9pt;padding:15px}.report-footer{font-size:7.5pt}@media print{.report{width:auto;padding:0}.report-header,.metrics,.focus,.agenda-heading{break-inside:avoid}.day-block{break-inside:auto}.day-block>header{break-after:avoid}.report-footer{position:static;margin-top:12px}}"}
 function weeklyDailyTableStyles(){return ".day-block table{display:table;width:100%;table-layout:fixed}.day-block thead{display:table-header-group}.day-block tbody{display:table-row-group}.day-block tbody tr{display:table-row;background:#FFF!important;break-inside:avoid;page-break-inside:avoid}.day-block tbody tr:nth-child(even){background:#F8F9FA!important}.day-block tbody tr.urgent{background:#FFF2F3!important}.day-block th{display:table-cell;padding:6px 5px;font-size:7.2pt;line-height:1.15;vertical-align:middle}.day-block td{display:table-cell;padding:7px 5px;font-size:7.7pt;line-height:1.25;vertical-align:top;border-top:1px solid var(--line)}.day-block td:before{display:none!important;content:none!important}.day-block col:nth-child(1){width:9%}.day-block col:nth-child(2){width:12%}.day-block col:nth-child(3){width:12%}.day-block col:nth-child(4){width:19%}.day-block col:nth-child(5){width:16%}.day-block col:nth-child(6){width:32%}.day-block>header{break-after:avoid;page-break-after:avoid}.day-block thead{break-after:avoid;page-break-after:avoid}"}
-function generateWeeklyTurnsPdf(){const preview=window.open('','_blank');if(!preview){toast('El navegador bloqueó la vista previa de impresión');return}const report=buildWeeklyTurnsPrintHtml(weeklyReportDate).replace(/<section class='summary'>[\s\S]*?<\/section><section class='agenda'>/,"<section class='agenda'>"),html=prepareBrowserPrintHtml(report.replace('</style>',weeklyPortraitStyles()+weeklyDailyTableStyles()+'</style>'));preview.document.open();preview.document.write(html);preview.document.close();preview.focus();const range=weeklyTurnRange(weeklyReportDate);toast('Reporte semanal vertical: '+reportDate(range.monday)+' al '+reportDate(range.friday))}
-function generatePartsPendingPdf(){const preview=window.open('','_blank');if(!preview){toast('El navegador bloqueó la vista previa de impresión');return}preview.document.open();preview.document.write(prepareBrowserPrintHtml(buildPartsPrintHtml()));preview.document.close();preview.focus();toast('Vista previa del reporte abierta')}
-function generateTurnsPendingPdf(){const preview=window.open('','_blank');if(!preview){toast('El navegador bloqueó la vista previa de impresión');return}preview.document.open();preview.document.write(prepareBrowserPrintHtml(buildTurnsPrintHtml()));preview.document.close();preview.focus();toast('Vista previa del reporte de turnos abierta')}
+function generateWeeklyTurnsPdf(){const report=buildWeeklyTurnsPrintHtml(weeklyReportDate).replace(/<section class='summary'>[\s\S]*?<\/section><section class='agenda'>/,"<section class='agenda'>"),html=prepareBrowserPrintHtml(report.replace('</style>',weeklyPortraitStyles()+weeklyDailyTableStyles()+'</style>'));openReportPreview(html);const range=weeklyTurnRange(weeklyReportDate);toast('Reporte semanal vertical: '+reportDate(range.monday)+' al '+reportDate(range.friday))}
+function generatePartsPendingPdf(){openReportPreview(prepareBrowserPrintHtml(buildPartsPrintHtml()));toast('Vista previa del reporte abierta')}
+function generateTurnsPendingPdf(){openReportPreview(prepareBrowserPrintHtml(buildTurnsPrintHtml()));toast('Vista previa del reporte de turnos abierta')}
 function bindReportControls(){const partsButton=document.getElementById('generatePartsPdf'),turnsButton=document.getElementById('generateTurnsPdf'),weeklyButton=document.getElementById('generateWeeklyTurnsPdf');if(partsButton)partsButton.onclick=generatePartsPendingPdf;if(turnsButton)turnsButton.onclick=generateTurnsPendingPdf;if(weeklyButton)weeklyButton.onclick=showWeeklyReportDialog}
 function bindTurnViewControls(){document.querySelectorAll('[data-turn-view]').forEach(button=>button.onclick=()=>{turnFilter=button.dataset.turnView;render()});const select=document.getElementById('turnFilterSelect');if(select)select.onchange=()=>{turnFilter=select.value;render()};const sortSelect=document.getElementById('turnsSortSelect');if(sortSelect)sortSelect.onchange=()=>{turnsSort=sortSelect.value;const priority=document.getElementById('priorityFilter')?.value||'';let items=filterTurns(filtered(getViewCases('appointments')));if(priority)items=items.filter(c=>c.priority===priority);document.getElementById('caseTable').innerHTML=turnsTable(items);bindInteractiveTables()}}
 function bindPartsViewControls(){document.querySelectorAll('[data-parts-view]').forEach(button=>button.onclick=()=>{partsFilter=button.dataset.partsView;render()});const select=document.getElementById('partsFilterSelect');if(select)select.onchange=()=>{partsFilter=select.value;render()};const sortSelect=document.getElementById('partsSortSelect');if(sortSelect)sortSelect.onchange=()=>{partsSort=sortSelect.value;const priority=document.getElementById('priorityFilter')?.value||'';let items=filterParts(filtered(getViewCases('parts')));if(priority)items=items.filter(c=>c.priority===priority);document.getElementById('caseTable').innerHTML=partsTable(items);bindInteractiveTables()}}
@@ -3086,10 +3145,111 @@ const USER_PERMISSIONS_KEY='amiun-user-permissions-v1';
 const USER_DIRECTORY_KEY='amiun-user-directory-v1';
 const USER_BRANCH_MIGRATION_KEY='amiun-user-branch-santa-fe-v1';
 const USER_BRANCHES=['Reconquista','Rafaela','Santa Fe'];
-function loadUserDirectory(){try{const stored=JSON.parse(localStorage.getItem(USER_DIRECTORY_KEY)||'{}');Object.entries(stored||{}).forEach(([username,data])=>{if(APPLICATION_USERS[username])Object.assign(APPLICATION_USERS[username],data);});if(!localStorage.getItem(USER_BRANCH_MIGRATION_KEY)){Object.values(APPLICATION_USERS).forEach(user=>{user.branch='Santa Fe'});localStorage.setItem(USER_BRANCH_MIGRATION_KEY,'done');}Object.values(APPLICATION_USERS).forEach(user=>{if(!user.branch)user.branch='Santa Fe'});persistUserDirectory()}catch(error){console.warn('[Usuarios] No se pudo leer el directorio',error)}}
-function persistUserDirectory(){const data=Object.fromEntries(Object.entries(APPLICATION_USERS).map(([username,user])=>[username,{active:user.active!==false,displayName:user.displayName,role:user.role,initials:user.initials,branch:user.branch||''}]));localStorage.setItem(USER_DIRECTORY_KEY,JSON.stringify(data))}
+const normalizeUserDirectory=value=>{
+  const source=value&&typeof value==='object'?value:{};
+  return Object.fromEntries(Object.entries(source).map(([username,data])=>{
+    const user=data&&typeof data==='object'?data:{};
+    return [username,{
+      active:user.active!==false,
+      displayName:String(user.displayName||''),
+      role:String(user.role||''),
+      initials:String(user.initials||''),
+      branch:USER_BRANCHES.includes(user.branch)?user.branch:'Santa Fe',
+      updatedAt:String(user.updatedAt||'')
+    }];
+  }));
+};
+const userDirectorySignature=value=>JSON.stringify(Object.fromEntries(Object.entries(normalizeUserDirectory(value)).sort(([a],[b])=>a.localeCompare(b))));
+function userDirectorySnapshot(){
+  return Object.fromEntries(Object.entries(APPLICATION_USERS).map(([username,user])=>[username,{
+    active:user.active!==false,
+    displayName:user.displayName,
+    role:user.role,
+    initials:user.initials,
+    branch:user.branch||'Santa Fe',
+    updatedAt:user.updatedAt||''
+  }]));
+}
+function applyUserDirectory(value,{renderIfChanged=true}={}){
+  const normalized=normalizeUserDirectory(value);
+  const before=userDirectorySignature(userDirectorySnapshot());
+  Object.entries(normalized).forEach(([username,data])=>{
+    if(APPLICATION_USERS[username])Object.assign(APPLICATION_USERS[username],data);
+  });
+  const after=userDirectorySignature(userDirectorySnapshot());
+  localStorage.setItem(USER_DIRECTORY_KEY,JSON.stringify(userDirectorySnapshot()));
+  if(renderIfChanged&&before!==after&&typeof renderAfterRemoteSync==='function'&&!document.body.classList.contains('auth-locked'))renderAfterRemoteSync();
+  return before!==after;
+}
+async function pushUserDirectory(){
+  if(!amiunSupabaseClient)return true;
+  try{
+    const currentResponse=await fetch(`${AMIUN_SUPABASE_URL}/rest/v1/app_state?key=eq.${encodeURIComponent(USER_DIRECTORY_REMOTE_KEY)}&select=value`,{headers:amiunSupabaseRestHeaders});
+    if(!currentResponse.ok)throw new Error(await currentResponse.text());
+    const currentRows=await currentResponse.json();
+    const remote=normalizeUserDirectory(currentRows?.[0]?.value||{});
+    const local=userDirectorySnapshot(),merged={...remote};
+    Object.entries(local).forEach(([username,data])=>{
+      const remoteTime=Date.parse(remote[username]?.updatedAt||'')||0;
+      const localTime=Date.parse(data.updatedAt||'')||0;
+      if(!remote[username]||localTime>=remoteTime)merged[username]=data;
+    });
+    const response=await fetch(`${AMIUN_SUPABASE_URL}/rest/v1/app_state?on_conflict=key`,{
+      method:'POST',
+      headers:{...amiunSupabaseRestHeaders,Prefer:'resolution=merge-duplicates,return=minimal'},
+      body:JSON.stringify({key:USER_DIRECTORY_REMOTE_KEY,value:merged,updated_at:new Date().toISOString()})
+    });
+    if(!response.ok)throw new Error(await response.text());
+    applyUserDirectory(merged,{renderIfChanged:false});
+    announceSharedDataChange('app-state');
+    return true;
+  }catch(error){
+    console.warn('[Usuarios] No se pudo compartir el directorio de usuarios',error);
+    return false;
+  }
+}
+async function pullUserDirectory(){
+  if(!amiunSupabaseClient)return false;
+  try{
+    const response=await fetch(`${AMIUN_SUPABASE_URL}/rest/v1/app_state?key=eq.${encodeURIComponent(USER_DIRECTORY_REMOTE_KEY)}&select=value`,{headers:amiunSupabaseRestHeaders});
+    if(!response.ok)throw new Error(await response.text());
+    const rows=await response.json(),remote=normalizeUserDirectory(rows?.[0]?.value||{});
+    if(!Object.keys(remote).length){await pushUserDirectory();return true;}
+    const local=userDirectorySnapshot(),merged={...remote};
+    Object.entries(local).forEach(([username,data])=>{
+      const remoteTime=Date.parse(remote[username]?.updatedAt||'')||0;
+      const localTime=Date.parse(data.updatedAt||'')||0;
+      if(!remote[username]||localTime>remoteTime)merged[username]=data;
+    });
+    const changed=applyUserDirectory(merged);
+    if(userDirectorySignature(merged)!==userDirectorySignature(remote))await pushUserDirectory();
+    return changed;
+  }catch(error){
+    console.warn('[Usuarios] No se pudo leer el directorio compartido',error);
+    return false;
+  }
+}
+function loadUserDirectory(){
+  try{
+    const stored=JSON.parse(localStorage.getItem(USER_DIRECTORY_KEY)||'{}');
+    Object.entries(stored||{}).forEach(([username,data])=>{if(APPLICATION_USERS[username])Object.assign(APPLICATION_USERS[username],data);});
+    if(!localStorage.getItem(USER_BRANCH_MIGRATION_KEY)){
+      Object.values(APPLICATION_USERS).forEach(user=>{user.branch='Santa Fe';user.updatedAt=new Date().toISOString();});
+      localStorage.setItem(USER_BRANCH_MIGRATION_KEY,'done');
+    }
+    Object.values(APPLICATION_USERS).forEach(user=>{if(!user.branch)user.branch='Santa Fe';});
+    persistUserDirectory({syncRemote:false});
+  }catch(error){console.warn('[Usuarios] No se pudo leer el directorio',error)}
+}
+function persistUserDirectory({syncRemote=true}={}){
+  const data=userDirectorySnapshot();
+  localStorage.setItem(USER_DIRECTORY_KEY,JSON.stringify(data));
+  return syncRemote?pushUserDirectory():Promise.resolve(true);
+}
 let selectedPermissionUser='fneyra';
 let selectedDirectoryUser='';
+let selectedPasswordUser='fneyra';
+let passwordTargetUsers=[];
 function defaultPermissionsForUser(username){
   const user=APPLICATION_USERS[username],allowed=Array.isArray(user?.allowedViews)?user.allowedViews:null;
   return Object.fromEntries(views.map(view=>{const access=!allowed||allowed.includes(view.id)||view.id==='reminders',readOnly=['dashboard','history'].includes(view.id);return [view.id,{access,modify:access&&!readOnly}]}));
@@ -3668,372 +3828,3 @@ todayAppointmentsView=function(){
   const longDate=new Intl.DateTimeFormat('es-AR',{weekday:'long',day:'numeric',month:'long',year:'numeric'}).format(dateOnly(selectedExecutionDate));
   return todayAppointmentsViewWithLongDate().replace(escapeHtml(longDate),escapeHtml(fmtDate(selectedExecutionDate)));
 };
-
-
-
-
-
-
-
-
-
-
-
-                                                                                                            
-                                                                                                            // Vista previa compatible c
-
-/* Cambio de contraseña del usuario actual. */
-(()=>{
-  const addPasswordSettings=()=>{
-    if(typeof currentView==='undefined'||currentView!=='settings')return;
-    const nav=document.querySelector('.settings-nav-list');
-    const panels=document.querySelector('.settings-panels');
-    if(!nav||!panels)return;
-    if(!nav.querySelector('[data-settings-panel="password"]')){
-      nav.insertAdjacentHTML('beforeend','<button type="button" class="settings-nav-item" data-settings-panel="password" aria-controls="settings-panel-password" aria-expanded="false"><span class="settings-nav-icon" aria-hidden="true">CL</span><span><strong>Mi contraseña</strong><small>Cambiar acceso</small></span><span class="settings-nav-arrow" aria-hidden="true">›</span></button>');
-    }
-    let panel=document.getElementById('settings-panel-password');
-    if(!panel){
-      panel=document.createElement('section');
-      panel.id='settings-panel-password';
-      panel.className='settings-panel parts-email-settings';
-      panel.setAttribute('aria-labelledby','passwordSettingsTitle');
-      const username=typeof currentApplicationUser==='function'?(currentApplicationUser()?.username||''):'';
-      panel.innerHTML='<header><div><span class="action-kicker">Acceso personal</span><h2 id="passwordSettingsTitle">Cambiar contraseña</h2><p>Actualizá la contraseña del usuario <strong>'+escapeHtml(username)+'</strong> sin correos ni restablecimientos externos.</p></div><span class="parts-email-status"><i aria-hidden="true"></i>Sesión protegida</span></header><form class="parts-email-settings-form" data-password-form autocomplete="off"><label><span>CONTRASEÑA ACTUAL</span><input name="currentPassword" type="password" autocomplete="current-password" minlength="4" required></label><label><span>NUEVA CONTRASEÑA</span><input name="newPassword" type="password" autocomplete="new-password" minlength="4" required><small>Usá al menos 4 caracteres.</small></label><label><span>REPETIR NUEVA CONTRASEÑA</span><input name="confirmPassword" type="password" autocomplete="new-password" minlength="4" required></label><p class="parts-email-settings-error" role="alert" aria-live="assertive"></p><footer><div>La contraseña se guarda como hash y nunca se muestra.</div><button class="primary-button" type="submit">Cambiar contraseña</button></footer></form>';
-      panels.appendChild(panel);
-    }
-    if(!panel.dataset.bound){
-      const form=panel.querySelector('[data-password-form]');
-      const errorBox=panel.querySelector('.parts-email-settings-error');
-      const submit=form.querySelector('[type="submit"]');
-      form.onsubmit=async event=>{
-        event.preventDefault();
-        const data=new FormData(form),currentPassword=String(data.get('currentPassword')||''),newPassword=String(data.get('newPassword')||''),confirmPassword=String(data.get('confirmPassword')||'');
-        errorBox.textContent='';
-        if(newPassword.length<4){errorBox.textContent='La nueva contraseña debe tener al menos 4 caracteres.';return}
-        if(newPassword!==confirmPassword){errorBox.textContent='Las nuevas contraseñas no coinciden.';return}
-        submit.disabled=true;submit.textContent='Guardando…';
-        try{
-          const response=await fetch(AMIUN_SUPABASE_URL+'/rest/v1/rpc/change_app_password',{method:'POST',headers:amiunSupabaseRestHeaders,body:JSON.stringify({p_current_password:currentPassword,p_new_password:newPassword})});
-          const body=await response.json().catch(()=>null);
-          if(!response.ok||body!==true)throw new Error(body?.message||'La contraseña actual no es correcta o no se pudo guardar.');
-          form.reset();
-          toast('Contraseña actualizada correctamente.');
-        }catch(error){errorBox.textContent=error?.message||'No se pudo actualizar la contraseña.'}
-        finally{submit.disabled=false;submit.textContent='Cambiar contraseña'}
-      };
-      panel.dataset.bound='1';
-    }
-    if(typeof bindSettings==='function')bindSettings();
-  };
-  const originalRender=render;
-  render=function(){const result=originalRender.apply(this,arguments);setTimeout(addPasswordSettings,0);return result};
-  setTimeout(addPasswordSettings,0);
-})();
-/* Ajuste de visibilidad del panel de contraseña. */
-(()=>{
-  const syncPasswordPanelVisibility=()=>{
-    if(typeof currentView!=='undefined'&&currentView==='settings'){
-      const panel=document.getElementById('settings-panel-password');
-      if(panel)panel.hidden=typeof settingsPanel==='undefined'||settingsPanel!=='password';
-    }
-  };
-  const previousRender=render;
-  render=function(){const result=previousRender.apply(this,arguments);setTimeout(syncPasswordPanelVisibility,0);return result};
-  setTimeout(syncPasswordPanelVisibility,0);
-})();
-
-                                                                                                                                                                                                                                                                                                                                                                                                                                     
-/* Administración de contraseñas por usuario. */
-(()=>{
-  let remoteUsers=[];
-  let selectedUser='fneyra';
-  const localUsers=()=>Object.values(APPLICATION_USERS).map(user=>({username:user.username,display_name:user.displayName,role:user.role,active:user.active!==false}));
-  const panelMarkup=users=>{const current=users.find(user=>user.username===selectedUser)||users.find(user=>user.active!==false)||users[0];if(current)selectedUser=current.username;return '<header><div><span class="action-kicker">Administración de acceso</span><h2 id="passwordSettingsTitle">Contraseñas de usuarios</h2><p>Elegí el usuario al que querés asignarle una nueva contraseña. No se muestran correos ni contraseñas existentes.</p></div><span class="parts-email-status"><i aria-hidden="true"></i>Solo administrador</span></header><form id="changePasswordForm" class="password-settings-form" autocomplete="off"><label><span>USUARIO</span><select id="passwordTargetUser" name="targetUsername" required>'+users.map(user=>'<option value="'+escapeHtml(user.username)+'" '+(user.username===selectedUser?'selected ':'')+(user.active===false?'disabled':'')+'>'+escapeHtml(user.display_name||user.username)+' · '+escapeHtml(user.username)+(user.active===false?' · Inactivo':'')+'</option>').join('')+'</select><small>La lista se obtiene del directorio del proyecto nuevo.</small></label><label><span>NUEVA CONTRASEÑA</span><input name="newPassword" type="password" autocomplete="new-password" minlength="4" required><small>Usá al menos 8 caracteres cuando sea posible.</small></label><label><span>REPETIR NUEVA CONTRASEÑA</span><input name="confirmPassword" type="password" autocomplete="new-password" minlength="4" required></label><p class="password-settings-error" role="alert" aria-live="assertive"></p><footer><span>La contraseña se guarda como hash y nunca se muestra en la aplicación.</span><button class="primary-button" type="submit">Guardar contraseña</button></footer></form>'};
-  const loadUsers=async()=>{if(!amiunSupabaseClient)return;try{const response=await fetch(AMIUN_SUPABASE_URL+'/rest/v1/rpc/list_app_users_for_password_reset',{headers:amiunSupabaseRestHeaders});const data=await response.json().catch(()=>null);if(response.ok&&Array.isArray(data)&&data.length)remoteUsers=data}catch(error){console.warn('[Contraseñas] No se pudo cargar el directorio remoto',error)}};
-  const bindPanel=async()=>{if(typeof currentView==='undefined'||currentView!=='settings')return;const panel=document.getElementById('settings-panel-password');if(!panel)return;const users=remoteUsers.length?remoteUsers:localUsers();panel.innerHTML=panelMarkup(users);panel.hidden=typeof settingsPanel==='undefined'||settingsPanel!=='password';const select=panel.querySelector('#passwordTargetUser');select.onchange=()=>{selectedUser=select.value;bindPanel()};const form=panel.querySelector('#changePasswordForm'),errorBox=panel.querySelector('.password-settings-error'),submit=form.querySelector('[type=submit]');form.onsubmit=async event=>{event.preventDefault();if(!canModifyView('settings')){toast('No tenés permiso para cambiar contraseñas.');return}const data=new FormData(form),targetUsername=String(data.get('targetUsername')||selectedUser||'').trim().toLowerCase(),newPassword=String(data.get('newPassword')||''),confirmPassword=String(data.get('confirmPassword')||'');errorBox.textContent='';if(!targetUsername){errorBox.textContent='Elegí un usuario.';return}if(newPassword.length<4){errorBox.textContent='La nueva contraseña debe tener al menos 4 caracteres.';return}if(newPassword!==confirmPassword){errorBox.textContent='Las nuevas contraseñas no coinciden.';return}submit.disabled=true;submit.textContent='Guardando…';try{if(amiunSupabaseClient){const response=await fetch(AMIUN_SUPABASE_URL+'/rest/v1/rpc/admin_reset_app_password',{method:'POST',headers:amiunSupabaseRestHeaders,body:JSON.stringify({p_target_username:targetUsername,p_new_password:newPassword})});const body=await response.json().catch(()=>null);if(!response.ok||body!==true)throw new Error(body?.message||'No se pudo cambiar la contraseña de ese usuario.')}else{const user=APPLICATION_USERS[targetUsername];if(!user)throw new Error('El usuario seleccionado no existe.');user.passwordHash=await credentialHash(newPassword)}form.reset();selectedUser=targetUsername;toast('Contraseña de '+(APPLICATION_USERS[targetUsername]?.displayName||targetUsername)+' actualizada correctamente.')}catch(error){errorBox.textContent=error?.message||'No se pudo actualizar la contraseña.'}finally{submit.disabled=false;submit.textContent='Guardar contraseña'}};if(!remoteUsers.length&&amiunSupabaseClient){await loadUsers();if(remoteUsers.length)bindPanel()}};
-  const previousRender=render;render=function(){const result=previousRender.apply(this,arguments);setTimeout(bindPanel,0);return result};setTimeout(bindPanel,0);
-})();
-
-                                            /* Pulido del selector de usuarios y del formulario de contraseñas. */
-(()=>{
-  const styleId='admin-password-form-polish';
-  const ensureStyles=()=>{
-    if(document.getElementById(styleId))return;
-    const style=document.createElement('style');
-    style.id=styleId;
-    style.textContent=`
-#settings-panel-password .password-settings-form{
-  display:grid;
-  grid-template-columns:minmax(220px,1fr) minmax(220px,1fr);
-  gap:20px 24px;
-  margin-top:24px;
-}
-#settings-panel-password .password-settings-form label{
-  display:flex;
-  flex-direction:column;
-  gap:8px;
-  min-width:0;
-}
-#settings-panel-password .password-settings-form label:first-child{
-  grid-column:1 / -1;
-}
-#settings-panel-password .password-settings-form label > span{
-  color:#5f6670;
-  font-size:11px;
-  font-weight:800;
-  letter-spacing:.08em;
-}
-#settings-panel-password .password-settings-form select,
-#settings-panel-password .password-settings-form input{
-  width:100%;
-  min-height:44px;
-  box-sizing:border-box;
-  border:1px solid #ccd1d8;
-  border-radius:6px;
-  background:#fff;
-  color:#17191c;
-  padding:0 12px;
-  font:inherit;
-}
-#settings-panel-password .password-settings-form select:focus,
-#settings-panel-password .password-settings-form input:focus{
-  outline:2px solid rgba(235,10,30,.18);
-  border-color:#eb0a1e;
-}
-#settings-panel-password .password-settings-form small{
-  color:#737b85;
-  font-size:12px;
-  line-height:1.35;
-}
-#settings-panel-password .password-settings-form .password-settings-error{
-  grid-column:1 / -1;
-  min-height:20px;
-  margin:0;
-  color:#c72a35;
-}
-#settings-panel-password .password-settings-form footer{
-  grid-column:1 / -1;
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:20px;
-  padding-top:4px;
-  color:#69717b;
-  font-size:13px;
-}
-@media (max-width:760px){
-  #settings-panel-password .password-settings-form{grid-template-columns:1fr}
-  #settings-panel-password .password-settings-form label:first-child,
-  #settings-panel-password .password-settings-form .password-settings-error,
-  #settings-panel-password .password-settings-form footer{grid-column:1}
-  #settings-panel-password .password-settings-form footer{align-items:stretch;flex-direction:column}
-}
-`;
-    document.head.appendChild(style);
-  };
-  const cleanUserOptionLabels=()=>{
-    const select=document.getElementById('passwordTargetUser');
-    if(!select)return;
-    [...select.options].forEach(option=>{
-      const label=option.textContent.split(' · ')[0].trim();
-      if(label)option.textContent=label;
-    });
-  };
-  const previousRender=render;
-  render=function(){
-    const result=previousRender.apply(this,arguments);
-    setTimeout(()=>{ensureStyles();cleanUserOptionLabels()},0);
-    return result;
-  };
-  ensureStyles();
-  setTimeout(cleanUserOptionLabels,0);
-})();
-
-
-/* Refinamiento visual del panel de contraseñas. */
-(()=>{
-  const styleId='admin-password-form-refinement-v2';
-  if(document.getElementById(styleId))return;
-  const style=document.createElement('style');
-  style.id=styleId;
-  style.textContent=`
-#settings-panel-password{
-  overflow:hidden;
-  border:1px solid #d8dde4;
-  border-top:4px solid #df2f2f;
-  border-radius:10px;
-  background:#fff;
-  box-shadow:0 10px 28px rgba(22,29,37,.06);
-}
-#settings-panel-password>header{
-  padding:28px 32px 24px;
-  background:linear-gradient(180deg,#fff 0%,#fbfcfd 100%);
-  border-bottom:1px solid #e3e7ec;
-}
-#settings-panel-password>header h2{
-  margin:5px 0 7px;
-  color:#181b1f;
-  font-size:28px;
-  line-height:1.08;
-  letter-spacing:-.025em;
-}
-#settings-panel-password>header p{
-  max-width:760px;
-  margin:0;
-  color:#68717d;
-  font-size:14px;
-  line-height:1.5;
-}
-#settings-panel-password>header .parts-email-status{
-  border-color:#d7dce3;
-  border-radius:999px;
-  background:#fff;
-  padding:9px 14px;
-  color:#58616d;
-  font-size:11px;
-  letter-spacing:.06em;
-}
-#settings-panel-password .password-settings-form{
-  align-content:start;
-  grid-template-columns:repeat(2,minmax(0,1fr));
-  gap:16px;
-  margin:0;
-  padding:22px 32px 24px;
-  background:#f7f8fa;
-}
-#settings-panel-password .password-settings-form label{
-  display:flex;
-  flex-direction:column;
-  gap:8px;
-  min-width:0;
-  padding:16px;
-  border:1px solid #e0e4e9;
-  border-radius:8px;
-  background:#fff;
-  box-shadow:0 2px 7px rgba(22,29,37,.035);
-}
-#settings-panel-password .password-settings-form label:first-child{
-  display:grid;
-  grid-column:1 / -1;
-  grid-template-columns:132px minmax(0,1fr);
-  column-gap:18px;
-  align-items:center;
-}
-#settings-panel-password .password-settings-form label:first-child>span{grid-row:1 / span 2;align-self:center}
-#settings-panel-password .password-settings-form label:first-child small{grid-column:2}
-#settings-panel-password .password-settings-form label>span{
-  color:#59626e;
-  font-size:11px;
-  font-weight:850;
-  letter-spacing:.08em;
-}
-#settings-panel-password .password-settings-form select,
-#settings-panel-password .password-settings-form input{
-  width:100%;
-  min-height:46px;
-  box-sizing:border-box;
-  border:1px solid #cbd2da;
-  border-radius:6px;
-  background:#fff;
-  color:#17191c;
-  padding:0 13px;
-  font:inherit;
-  transition:border-color .16s ease,box-shadow .16s ease,background .16s ease;
-}
-#settings-panel-password .password-settings-form select{font-weight:650;cursor:pointer}
-#settings-panel-password .password-settings-form select:focus,
-#settings-panel-password .password-settings-form input:focus{
-  border-color:#df2f2f;
-  outline:0;
-  box-shadow:0 0 0 4px rgba(223,47,47,.11);
-}
-#settings-panel-password .password-settings-form label small{
-  margin:0;
-  color:#7a838e;
-  font-size:12px;
-  line-height:1.4;
-}
-#settings-panel-password .password-settings-form .password-settings-error{
-  grid-column:1 / -1;
-  min-height:0;
-  margin:0;
-  color:#bd2020;
-  font-size:12px;
-}
-#settings-panel-password .password-settings-form .password-settings-error:empty{display:none}
-#settings-panel-password .password-settings-form footer{
-  grid-column:1 / -1;
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:20px;
-  margin-top:2px;
-  padding:18px 0 0;
-  border-top:1px solid #e1e5ea;
-  color:#68717d;
-  font-size:12px;
-  line-height:1.45;
-}
-#settings-panel-password .password-settings-form footer span{max-width:540px}
-#settings-panel-password .password-settings-form footer .primary-button{
-  min-height:44px;
-  padding:0 22px;
-  border-radius:6px;
-  box-shadow:0 4px 10px rgba(223,47,47,.16);
-  white-space:nowrap;
-}
-body[data-theme='dark'] #settings-panel-password{background:#17191c;border-color:#343a41}
-body[data-theme='dark'] #settings-panel-password>header{background:linear-gradient(180deg,#1b1f23 0%,#17191c 100%);border-color:#343a41}
-body[data-theme='dark'] #settings-panel-password>header h2{color:#f3f4f5}
-body[data-theme='dark'] #settings-panel-password>header p,body[data-theme='dark'] #settings-panel-password .password-settings-form footer{color:#a8b0ba}
-body[data-theme='dark'] #settings-panel-password .password-settings-form{background:#111417}
-body[data-theme='dark'] #settings-panel-password .password-settings-form label{background:#1b1f23;border-color:#343a41}
-body[data-theme='dark'] #settings-panel-password .password-settings-form select,body[data-theme='dark'] #settings-panel-password .password-settings-form input{background:#17191c;color:#f3f4f5;border-color:#4a525c}
-@media (max-width:760px){
-  #settings-panel-password>header{padding:22px 20px 20px}
-  #settings-panel-password>header .parts-email-status{margin-top:16px;display:inline-flex}
-  #settings-panel-password .password-settings-form{grid-template-columns:1fr;padding:18px 20px 20px}
-  #settings-panel-password .password-settings-form label:first-child{display:flex;grid-column:1;gap:8px}
-  #settings-panel-password .password-settings-form label:first-child>span{grid-row:auto}
-  #settings-panel-password .password-settings-form label:first-child small{grid-column:auto}
-  #settings-panel-password .password-settings-form .password-settings-error,
-  #settings-panel-password .password-settings-form footer{grid-column:1}
-  #settings-panel-password .password-settings-form footer{align-items:stretch;flex-direction:column}
-  #settings-panel-password .password-settings-form footer .primary-button{width:100%}
-}
-`;
-  document.head.appendChild(style);
-})();
-
-                                            
-/* Mantener los nombres del selector sin identificadores técnicos al re-renderizar. */
-(()=>{
-  const cleanUserOptionLabels=()=>{
-    const select=document.getElementById('passwordTargetUser');
-    if(!select)return;
-    [...select.options].forEach(option=>{
-      const raw=option.textContent.trim();
-      const name=raw.split(' · ')[0].trim();
-      const inactive=/ · Inactivo$/.test(raw);
-      const visible=name+(inactive?' · Inactivo':'');
-      if(name&&raw!==visible)option.textContent=visible;
-    });
-  };
-  const watchPanel=()=>{
-    const panel=document.getElementById('settings-panel-password');
-    if(!panel)return;
-    cleanUserOptionLabels();
-    if(panel.dataset.userLabelObserver)return;
-    const observer=new MutationObserver(cleanUserOptionLabels);
-    observer.observe(panel,{childList:true,subtree:true,characterData:true});
-    panel.dataset.userLabelObserver='1';
-  };
-  const previousRender=render;
-  render=function(){
-    const result=previousRender.apply(this,arguments);
-    setTimeout(watchPanel,0);
-    return result;
-  };
-  setTimeout(watchPanel,0);
-})();
