@@ -27,6 +27,7 @@ const NEW_CASE_NOTIFICATION_TIMEOUT = 30000;
 const PARTS_ORDER_EMAIL_SETTINGS_KEY = 'amiun-parts-order-email-settings-v1';
 const PARTS_ORDER_EMAIL_REMOTE_KEY = 'parts-order-email-settings';
 const USER_DIRECTORY_REMOTE_KEY = 'user-directory';
+const USER_PERMISSIONS_REMOTE_KEY = 'user-permissions';
 const REGISTRY_RESPONSIBLES_KEY = 'amiun-registry-responsibles-v1';
 const MANUAL_PARTS_REGISTRY_KEY = 'parts-registry-manual';
 const AMIUN_LOCAL_DEMO_MODE = window.location.protocol === 'file:' || ['127.0.0.1','localhost'].includes(window.location.hostname);
@@ -266,9 +267,11 @@ function announceSharedDataChange(scope='all'){
 }
 function refreshSharedAppState(){
   pullUserDirectory();
+  pullUserPermissions();
   pullPartsOrderEmailSettings();
   pullRegistryResponsibles();
   pullManualPartsRegistry();
+  pullDeletedCaseAudit();
   syncSharedReminders();
 }
 amiunCrossTabSyncChannel?.addEventListener('message',event=>{
@@ -722,9 +725,11 @@ function startSharedCasesSync() {
   if(!amiunSupabaseClient || amiunRemoteSyncTimer)return;
   pullSharedCasesFromSupabase({full:true});
   pullUserDirectory();
+  pullUserPermissions();
   pullPartsOrderEmailSettings();
   pullRegistryResponsibles();
   pullManualPartsRegistry();
+  pullDeletedCaseAudit();
   syncSharedReminders();
   if(amiunSupabaseRealtimeClient&&!amiunRealtimeChannel){
     amiunRealtimeChannel=amiunSupabaseRealtimeClient
@@ -735,7 +740,7 @@ function startSharedCasesSync() {
         if(status==='SUBSCRIBED')probeRemoteChanges({force:true});
       });
   }
-  amiunRemoteSyncTimer = setInterval(()=>{pullSharedCasesFromSupabase();pullUserDirectory();pullPartsOrderEmailSettings();pullRegistryResponsibles();pullManualPartsRegistry();syncSharedReminders()}, AMIUN_SHARED_SYNC_INTERVAL);
+  amiunRemoteSyncTimer = setInterval(()=>{pullSharedCasesFromSupabase();pullUserDirectory();pullUserPermissions();pullPartsOrderEmailSettings();pullRegistryResponsibles();pullManualPartsRegistry();pullDeletedCaseAudit();syncSharedReminders()}, AMIUN_SHARED_SYNC_INTERVAL);
   amiunFastSyncTimer = setInterval(probeRemoteChanges, AMIUN_FAST_SYNC_INTERVAL);
   probeRemoteChanges();
   window.addEventListener('focus', ()=>probeRemoteChanges({force:true}));
@@ -835,6 +840,7 @@ let reminderPending=loadStoredArray(REMINDER_PENDING_KEY,[]);
 let reminderSavedSnapshot=new Map(reminders.map(item=>[item.id,JSON.stringify(item)]));
 let reminderSyncBusy=false,reminderSyncReady=false,reminderSyncError=false;
 const DELETED_CASE_AUDIT_KEY='amiun-deleted-case-audit-v1';
+const DELETED_CASE_AUDIT_REMOTE_KEY='deleted-case-audit';
 let deletedCaseAudit=loadStoredArray(DELETED_CASE_AUDIT_KEY,[]);
 const CASE_LOCKS_KEY='amiun-case-locks-v1';
 const CASE_LOCK_TAB_KEY='amiun-case-lock-tab-v1';
@@ -932,7 +938,60 @@ const auditActor=()=>{
     ? APPLICATION_USERS[username].displayName
     : username==='fneyra'?'Fneyra':username;
 };
-function saveDeletedCaseAudit(){localStorage.setItem(DELETED_CASE_AUDIT_KEY,JSON.stringify(deletedCaseAudit))}
+const normalizeDeletedCaseAudit=value=>(Array.isArray(value)?value:[])
+  .filter(entry=>entry&&typeof entry==='object'&&String(entry.id||'').trim())
+  .map(entry=>({...entry,id:String(entry.id).trim(),at:String(entry.at||'')}));
+const deletedCaseAuditSignature=value=>JSON.stringify(normalizeDeletedCaseAudit(value).sort((a,b)=>String(a.id).localeCompare(String(b.id))));
+const mergeDeletedCaseAudit=(...sources)=>{
+  const merged=new Map();
+  sources.flatMap(normalizeDeletedCaseAudit).forEach(entry=>{
+    const previous=merged.get(entry.id);
+    const previousTime=Date.parse(previous?.at||'')||0;
+    const entryTime=Date.parse(entry.at||'')||0;
+    if(!previous||entryTime>=previousTime)merged.set(entry.id,entry);
+  });
+  return [...merged.values()].sort((a,b)=>String(b.at).localeCompare(String(a.at)));
+};
+let deletedCaseAuditSyncBusy=false;
+async function pushDeletedCaseAudit(){
+  if(!amiunSupabaseClient||deletedCaseAuditSyncBusy)return false;
+  deletedCaseAuditSyncBusy=true;
+  try{
+    const currentResponse=await fetch(`${AMIUN_SUPABASE_URL}/rest/v1/app_state?key=eq.${encodeURIComponent(DELETED_CASE_AUDIT_REMOTE_KEY)}&select=value`,{headers:amiunSupabaseRestHeaders});
+    if(!currentResponse.ok)throw new Error(await currentResponse.text());
+    const currentRows=await currentResponse.json();
+    const merged=mergeDeletedCaseAudit(currentRows?.[0]?.value||[],deletedCaseAudit);
+    const response=await fetch(`${AMIUN_SUPABASE_URL}/rest/v1/app_state?on_conflict=key`,{
+      method:'POST',
+      headers:{...amiunSupabaseRestHeaders,Prefer:'resolution=merge-duplicates,return=minimal'},
+      body:JSON.stringify({key:DELETED_CASE_AUDIT_REMOTE_KEY,value:merged,updated_at:new Date().toISOString()})
+    });
+    if(!response.ok)throw new Error(await response.text());
+    deletedCaseAudit=merged;
+    saveDeletedCaseAudit({syncRemote:false});
+    announceSharedDataChange('app-state');
+    return true;
+  }catch(error){console.warn('[Historial] No se pudo compartir el historial de eliminaciones',error);return false}
+  finally{deletedCaseAuditSyncBusy=false}
+}
+async function pullDeletedCaseAudit(){
+  if(!amiunSupabaseClient)return false;
+  try{
+    const response=await fetch(`${AMIUN_SUPABASE_URL}/rest/v1/app_state?key=eq.${encodeURIComponent(DELETED_CASE_AUDIT_REMOTE_KEY)}&select=value`,{headers:amiunSupabaseRestHeaders});
+    if(!response.ok)throw new Error(await response.text());
+    const rows=await response.json(),remote=normalizeDeletedCaseAudit(rows?.[0]?.value||[]),merged=mergeDeletedCaseAudit(deletedCaseAudit,remote);
+    const changed=deletedCaseAuditSignature(merged)!==deletedCaseAuditSignature(deletedCaseAudit);
+    deletedCaseAudit=merged;
+    saveDeletedCaseAudit({syncRemote:false});
+    if(deletedCaseAuditSignature(merged)!==deletedCaseAuditSignature(remote))await pushDeletedCaseAudit();
+    if(changed&&currentView==='history'&&typeof renderAfterRemoteSync==='function')renderAfterRemoteSync();
+    return true;
+  }catch(error){console.warn('[Historial] No se pudo leer el historial de eliminaciones compartido',error);return false}
+}
+function saveDeletedCaseAudit({syncRemote=true}={}){
+  localStorage.setItem(DELETED_CASE_AUDIT_KEY,JSON.stringify(deletedCaseAudit));
+  return syncRemote?pushDeletedCaseAudit():Promise.resolve(true);
+}
 function recordDeletedCaseAudit(record,action='Caso eliminado'){
   if(!record)return;
   deletedCaseAudit.unshift({
@@ -949,7 +1008,7 @@ function recordDeletedCaseAudit(record,action='Caso eliminado'){
     snapshot:{vin:record.vin,phone:record.phone,priority:record.priority,partCode:record.partCode,part:record.part,status:record.status},
     changes:[{key:'deleted',field:'Eliminación definitiva',before:'Caso activo',after:'Caso eliminado'}]
   });
-  saveDeletedCaseAudit();
+  void saveDeletedCaseAudit();
 }
 function readCaseLocks(){
   let locks={};
@@ -3254,11 +3313,62 @@ function defaultPermissionsForUser(username){
   const user=APPLICATION_USERS[username],allowed=Array.isArray(user?.allowedViews)?user.allowedViews:null;
   return Object.fromEntries(views.map(view=>{const access=!allowed||allowed.includes(view.id)||view.id==='reminders',readOnly=['dashboard','history'].includes(view.id);return [view.id,{access,modify:access&&!readOnly}]}));
 }
-function loadUserPermissions(){try{const parsed=JSON.parse(localStorage.getItem(USER_PERMISSIONS_KEY)||'{}');return parsed&&typeof parsed==='object'?parsed:{}}catch(error){console.warn('[Permisos] No se pudo leer la configuración guardada',error);return {}}}
+const normalizeUserPermissions=value=>{
+  const source=value&&typeof value==='object'?(value.matrix&&typeof value.matrix==='object'?value.matrix:value):{};
+  return Object.fromEntries(Object.entries(source).filter(([username])=>!String(username).startsWith('_')).map(([username,permissions])=>[
+    username,
+    permissions&&typeof permissions==='object'?{...permissions,_updatedAt:String(permissions._updatedAt||'')}:{_updatedAt:''}
+  ]));
+};
+const userPermissionsSignature=value=>JSON.stringify(Object.fromEntries(Object.entries(normalizeUserPermissions(value)).sort(([a],[b])=>a.localeCompare(b))));
+async function pushUserPermissions(){
+  if(!amiunSupabaseClient)return true;
+  try{
+    const currentResponse=await fetch(`${AMIUN_SUPABASE_URL}/rest/v1/app_state?key=eq.${encodeURIComponent(USER_PERMISSIONS_REMOTE_KEY)}&select=value`,{headers:amiunSupabaseRestHeaders});
+    if(!currentResponse.ok)throw new Error(await currentResponse.text());
+    const currentRows=await currentResponse.json();
+    const remote=normalizeUserPermissions(currentRows?.[0]?.value||{}),local=normalizeUserPermissions(USER_PERMISSION_MATRIX),merged={...remote};
+    Object.entries(local).forEach(([username,permissions])=>{
+      const remoteTime=Date.parse(remote[username]?._updatedAt||'')||0;
+      const localTime=Date.parse(permissions?._updatedAt||'')||0;
+      if(!remote[username]||localTime>=remoteTime)merged[username]=permissions;
+    });
+    const response=await fetch(`${AMIUN_SUPABASE_URL}/rest/v1/app_state?on_conflict=key`,{
+      method:'POST',
+      headers:{...amiunSupabaseRestHeaders,Prefer:'resolution=merge-duplicates,return=minimal'},
+      body:JSON.stringify({key:USER_PERMISSIONS_REMOTE_KEY,value:merged,updated_at:new Date().toISOString()})
+    });
+    if(!response.ok)throw new Error(await response.text());
+    USER_PERMISSION_MATRIX=merged;
+    localStorage.setItem(USER_PERMISSIONS_KEY,JSON.stringify(USER_PERMISSION_MATRIX));
+    announceSharedDataChange('app-state');
+    return true;
+  }catch(error){console.warn('[Permisos] No se pudo compartir la configuración de permisos',error);return false}
+}
+async function pullUserPermissions(){
+  if(!amiunSupabaseClient)return false;
+  try{
+    const response=await fetch(`${AMIUN_SUPABASE_URL}/rest/v1/app_state?key=eq.${encodeURIComponent(USER_PERMISSIONS_REMOTE_KEY)}&select=value`,{headers:amiunSupabaseRestHeaders});
+    if(!response.ok)throw new Error(await response.text());
+    const rows=await response.json(),remote=normalizeUserPermissions(rows?.[0]?.value||{}),local=normalizeUserPermissions(USER_PERMISSION_MATRIX),merged={...remote};
+    Object.entries(local).forEach(([username,permissions])=>{
+      const remoteTime=Date.parse(remote[username]?._updatedAt||'')||0;
+      const localTime=Date.parse(permissions?._updatedAt||'')||0;
+      if(!remote[username]||localTime>remoteTime)merged[username]=permissions;
+    });
+    const changed=userPermissionsSignature(merged)!==userPermissionsSignature(USER_PERMISSION_MATRIX);
+    USER_PERMISSION_MATRIX=merged;
+    localStorage.setItem(USER_PERMISSIONS_KEY,JSON.stringify(USER_PERMISSION_MATRIX));
+    if(userPermissionsSignature(merged)!==userPermissionsSignature(remote))await pushUserPermissions();
+    if(changed&&typeof renderAfterRemoteSync==='function'&&!document.body.classList.contains('auth-locked'))renderAfterRemoteSync();
+    return true;
+  }catch(error){console.warn('[Permisos] No se pudo leer la configuración compartida de permisos',error);return false}
+}
+function loadUserPermissions(){try{const parsed=JSON.parse(localStorage.getItem(USER_PERMISSIONS_KEY)||'{}');return normalizeUserPermissions(parsed)}catch(error){console.warn('[Permisos] No se pudo leer la configuración guardada',error);return {}}}
 let USER_PERMISSION_MATRIX=loadUserPermissions();
 loadUserDirectory();
-function permissionsForUser(username){const defaults=defaultPermissionsForUser(username),stored=USER_PERMISSION_MATRIX[username]||{};return Object.fromEntries(views.map(view=>{const value=stored[view.id]||{};return [view.id,{access:typeof value.access==='boolean'?value.access:defaults[view.id].access,modify:typeof value.modify==='boolean'?value.modify:defaults[view.id].modify}]}))}
-function persistUserPermissions(){localStorage.setItem(USER_PERMISSIONS_KEY,JSON.stringify(USER_PERMISSION_MATRIX))}
+function permissionsForUser(username){const defaults=defaultPermissionsForUser(username),stored=USER_PERMISSION_MATRIX[username]?._deleted?{}:(USER_PERMISSION_MATRIX[username]||{});return Object.fromEntries(views.map(view=>{const value=stored[view.id]||{};return [view.id,{access:typeof value.access==='boolean'?value.access:defaults[view.id].access,modify:typeof value.modify==='boolean'?value.modify:defaults[view.id].modify}]}))}
+function persistUserPermissions({syncRemote=true}={}){localStorage.setItem(USER_PERMISSIONS_KEY,JSON.stringify(USER_PERMISSION_MATRIX));return syncRemote?pushUserPermissions():Promise.resolve(true)}
 function savePermissionsFromSettings(){
   if(!canModifyView('settings')){toast('Tu perfil permite consultar Configuración, pero no modificar permisos.');return}
   const username=selectedPermissionUser,user=currentApplicationUser(),next={};
@@ -3266,11 +3376,11 @@ function savePermissionsFromSettings(){
   next.crossBranch=Boolean(document.querySelector('[data-permission-branches]')?.checked);
   if(!Object.values(next).some(permission=>permission.access)){toast('El usuario debe conservar acceso al menos a una sección.');return}
   if(user?.username===username&&!next.settings.access){toast('No podés quitarte tu propio acceso a Configuración.');return}
-  USER_PERMISSION_MATRIX[username]=next;persistUserPermissions();toast(`Permisos de ${APPLICATION_USERS[username].displayName} actualizados`);render();
+  USER_PERMISSION_MATRIX[username]={...next,_updatedAt:new Date().toISOString()};void persistUserPermissions();toast(`Permisos de ${APPLICATION_USERS[username].displayName} actualizados`);render();
 }
 function resetPermissionsFromSettings(){
   if(!canModifyView('settings')){toast('No tenés permiso para restablecer perfiles.');return}
-  delete USER_PERMISSION_MATRIX[selectedPermissionUser];persistUserPermissions();toast(`Perfil de ${APPLICATION_USERS[selectedPermissionUser].displayName} restablecido`);render();
+  USER_PERMISSION_MATRIX[selectedPermissionUser]={_deleted:true,_updatedAt:new Date().toISOString()};void persistUserPermissions();toast(`Perfil de ${APPLICATION_USERS[selectedPermissionUser].displayName} restablecido`);render();
 }
 function currentApplicationUser(){return APPLICATION_USERS[sessionStorage.getItem(AUTH_SESSION_KEY)]||null}
 function canAccessView(view,user=currentApplicationUser()){return !user||Boolean(permissionsForUser(user.username)[view]?.access)}
