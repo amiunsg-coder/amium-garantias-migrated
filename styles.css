@@ -10410,6 +10410,43 @@ body[data-theme="dark"] .registry-parts-stack textarea[readonly] {
 
 .parts-email-settings-form footer strong { color: #202328; }
 
+.password-settings {
+  margin-bottom: 22px;
+  border: 1px solid #d9dde3;
+  border-top: 4px solid #df2f2f;
+  background: #fff;
+}
+.password-settings > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 22px 24px 18px;
+  border-bottom: 1px solid #d9dde3;
+}
+.password-settings h2 { margin: 4px 0 5px; font-size: 22px; }
+.password-settings header p { margin: 0; color: #69707a; font-size: 13px; }
+.password-settings-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px 20px;
+  padding: 22px 24px 24px;
+}
+.password-settings-form label > span { display: block; margin-bottom: 7px; color: #535a64; font-size: 10px; font-weight: 850; letter-spacing: .075em; }
+.password-settings-form input { box-sizing: border-box; width: 100%; min-height: 44px; padding: 10px 12px; border: 1px solid #cfd4da; border-radius: 3px; background: #fff; color: #1f2328; font: inherit; }
+.password-settings-form input:focus { border-color: #df2f2f; outline: 3px solid rgba(223,47,47,.1); }
+.password-settings-form label small { display: block; margin-top: 7px; color: #737a84; font-size: 11px; line-height: 1.45; }
+.password-settings-error { grid-column: 1 / -1; min-height: 0; margin: 0; color: #bd2020; font-size: 12px; font-weight: 700; }
+.password-settings-error:empty { display: none; }
+.password-settings-form footer { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 18px; padding-top: 17px; border-top: 1px solid #e1e4e8; color: #68707a; font-size: 12px; }
+body[data-theme="dark"] .password-settings,
+body[data-theme="dark"] .password-settings-form input { background: #17191c; color: #f3f4f5; }
+@media (max-width: 760px) {
+  .password-settings > header,
+  .password-settings-form footer { align-items: stretch; flex-direction: column; }
+  .password-settings-form { grid-template-columns: 1fr; }
+}
+
 .parts-order-request-backdrop {
   position: fixed;
   inset: 0;
