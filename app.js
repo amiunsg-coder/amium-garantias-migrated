@@ -1261,6 +1261,9 @@ const saveRegistry = (replaceRemote=false) => {
 };
 const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 const ITC_STORAGE_KEY='amiun-itc-cases-v1';
+const ITC_REMOTE_MIGRATION_KEY='amiun-itc-remote-migration-v1';
+const ITC_CASES_TABLE='itc_cases';
+const ITC_COMMENTS_TABLE='itc_comments';
 const ITC_ORGANIZATIONS=['Amiun','Toyota'];
 const ITC_PRIORITIES=['A','B','C'];
 const ITC_STATUSES=['Activo','Cerrado'];
@@ -1295,8 +1298,119 @@ const normalizeItcCase=value=>{
   };
 };
 let itcCases=loadStoredArray(ITC_STORAGE_KEY,[]).map(normalizeItcCase);
-// ITC es un módulo local: sus lecturas y escrituras viven en localStorage y no pasan por Supabase.
 const saveItcCases=()=>localStorage.setItem(ITC_STORAGE_KEY,JSON.stringify(itcCases));
+let itcRemoteSyncBusy=false;
+let itcRemoteSyncTimer=0;
+const itcRemoteEnabled=()=>Boolean(amiunSupabaseClient&&amiunCustomSessionToken);
+const itcRemoteRequest=async(path,options={})=>{
+  if(!itcRemoteEnabled())return null;
+  const response=await fetch(`${AMIUN_SUPABASE_URL}/rest/v1/${path}`,{
+    ...options,
+    signal:options.signal||AbortSignal.timeout(15000),
+    headers:{...amiunSupabaseRestHeaders,...options.headers}
+  });
+  if(!response.ok)throw new Error(`ITC remoto: HTTP ${response.status}`);
+  return response;
+};
+const itcRemoteCasePayload=item=>({
+  id:item.id,
+  case_date:item.date,
+  priority:item.priority,
+  vin:item.vin,
+  responsible:item.responsible,
+  status:item.status,
+  created_at:item.createdAt,
+  updated_at:item.updatedAt,
+  closed_at:item.closedAt||null
+});
+const itcRemoteCommentPayload=(caseId,comment)=>({
+  id:comment.id,
+  itc_id:caseId,
+  author_org:comment.authorOrg,
+  body:comment.text,
+  created_at:comment.at
+});
+async function upsertItcRemoteCase(item){
+  if(!itcRemoteEnabled())return false;
+  try{
+    await itcRemoteRequest(`${ITC_CASES_TABLE}?on_conflict=id`,{
+      method:'POST',
+      headers:{Prefer:'resolution=merge-duplicates,return=minimal'},
+      body:JSON.stringify(itcRemoteCasePayload(item))
+    });
+    if(item.comments?.length){
+      await itcRemoteRequest(`${ITC_COMMENTS_TABLE}?on_conflict=id`,{
+        method:'POST',
+        headers:{Prefer:'resolution=merge-duplicates,return=minimal'},
+        body:JSON.stringify(item.comments.map(comment=>itcRemoteCommentPayload(item.id,comment)))
+      });
+    }
+    return true;
+  }catch(error){
+    console.warn('[ITC] No se pudo sincronizar el caso',error);
+    return false;
+  }
+}
+async function deleteItcRemoteCase(id){
+  if(!itcRemoteEnabled())return true;
+  try{
+    const response=await fetch(`${AMIUN_SUPABASE_URL}/rest/v1/${ITC_CASES_TABLE}?id=eq.${encodeURIComponent(id)}`,{
+      method:'DELETE',signal:AbortSignal.timeout(15000),headers:{...amiunSupabaseRestHeaders,Prefer:'return=minimal'}
+    });
+    return response.ok||response.status===404;
+  }catch(error){console.warn('[ITC] No se pudo eliminar el caso remoto',error);return false}
+}
+async function fetchItcRemoteCases(){
+  const [casesResponse,commentsResponse]=await Promise.all([
+    itcRemoteRequest(`${ITC_CASES_TABLE}?select=id,case_date,priority,vin,responsible,status,created_at,updated_at,closed_at&order=updated_at.desc`),
+    itcRemoteRequest(`${ITC_COMMENTS_TABLE}?select=id,itc_id,author_org,body,created_at&order=created_at.asc`)
+  ]);
+  const caseRows=await casesResponse.json(),commentRows=await commentsResponse.json();
+  const commentsByCase=new Map();
+  (Array.isArray(commentRows)?commentRows:[]).forEach(row=>{
+    const list=commentsByCase.get(String(row.itc_id))||[];
+    list.push({id:row.id,at:row.created_at,authorOrg:row.author_org,text:row.body});
+    commentsByCase.set(String(row.itc_id),list);
+  });
+  return (Array.isArray(caseRows)?caseRows:[]).map(row=>normalizeItcCase({
+    id:row.id,date:row.case_date,createdAt:row.created_at,updatedAt:row.updated_at,
+    priority:row.priority,vin:row.vin,responsible:row.responsible,status:row.status,
+    closedAt:row.closed_at,comments:commentsByCase.get(String(row.id))||[]
+  }));
+}
+async function syncItcCasesFromSupabase(){
+  if(!itcRemoteEnabled()||itcRemoteSyncBusy)return;
+  itcRemoteSyncBusy=true;
+  try{
+    const remoteCases=await fetchItcRemoteCases();
+    const remoteById=new Map(remoteCases.map(item=>[item.id,item]));
+    const migrationDone=localStorage.getItem(ITC_REMOTE_MIGRATION_KEY)==='1';
+    let migrationComplete=migrationDone;
+    if(!migrationDone){
+      migrationComplete=true;
+      for(const item of itcCases.filter(local=>!remoteById.has(local.id))){
+        if(await upsertItcRemoteCase(item))remoteById.set(item.id,item);else migrationComplete=false;
+      }
+      if(migrationComplete)localStorage.setItem(ITC_REMOTE_MIGRATION_KEY,'1');
+    }
+    for(const local of itcCases){
+      const remote=remoteById.get(local.id);
+      if(remote&&(Date.parse(local.updatedAt)||0)>(Date.parse(remote.updatedAt)||0)&&await upsertItcRemoteCase(local))remoteById.set(local.id,local);
+    }
+    const merged=[...remoteById.values()];
+    if(!migrationComplete)itcCases.filter(local=>!remoteById.has(local.id)).forEach(local=>merged.push(local));
+    const next=merged.sort((a,b)=>String(b.updatedAt||b.date).localeCompare(String(a.updatedAt||a.date)));
+    const changed=JSON.stringify(next)!==JSON.stringify(itcCases);
+    itcCases=next;saveItcCases();
+    if(changed&&currentView==='itc')render();
+  }catch(error){console.warn('[ITC] No se pudieron cargar los casos compartidos',error)}
+  finally{itcRemoteSyncBusy=false}
+}
+function queueItcRemoteSync(){
+  if(currentView!=='itc'||!itcRemoteEnabled()||itcRemoteSyncBusy)return;
+  clearTimeout(itcRemoteSyncTimer);
+  itcRemoteSyncTimer=setTimeout(()=>syncItcCasesFromSupabase(),0);
+}
 const itcActiveCount=()=>itcCases.filter(item=>item.status==='Activo').length;
 const itcCaseById=id=>itcCases.find(item=>item.id===id);
 const itcFilteredCases=()=>{
@@ -2162,7 +2276,7 @@ function itcDetailSheet(){
   const item=selectedItcId?itcCaseById(selectedItcId):null;
   if(!item)return '';
   const comments=[...(item.comments||[])].sort((a,b)=>String(a.at||'').localeCompare(String(b.at||'')));
-  return `<div class="itc-sheet-backdrop" role="dialog" aria-modal="true" aria-labelledby="itcSheetTitle"><aside class="itc-sheet"><header class="itc-sheet-header"><div class="itc-sheet-mark" aria-hidden="true"><span>TOYOTA</span><small>ITC</small></div><div><span>FICHA DE SEGUIMIENTO</span><h2 id="itcSheetTitle">${escapeHtml(item.id)}</h2><p>Conversación operativa entre Amiun y Toyota</p></div><button type="button" class="itc-close" data-itc-close aria-label="Cerrar ficha">×</button></header><form class="itc-detail-form" data-itc-detail-form="${escapeHtml(item.id)}"><section class="itc-detail-section"><header><span>01</span><div><h3>Datos del caso</h3><p>Información operativa del intercambio con Toyota.</p></div></header><div class="itc-detail-grid"><label><span>Fecha</span><input type="date" name="date" value="${escapeHtml(item.date)}" required></label><label><span>Prioridad</span><select name="priority">${ITC_PRIORITIES.map(value=>`<option value="${escapeHtml(value)}" ${item.priority===value?'selected':''}>${escapeHtml(value)}</option>`).join('')}</select></label><label class="itc-detail-vin-field"><span>VIN</span><input name="vin" maxlength="17" value="${escapeHtml(item.vin)}" placeholder="Ingresá el VIN" required></label><label class="itc-detail-status-field"><span>Estado</span><select name="status">${ITC_STATUSES.map(value=>`<option value="${escapeHtml(value)}" ${item.status===value?'selected':''}>${escapeHtml(value)}</option>`).join('')}</select></label></div><footer><span>${item.closedAt?`Cerrado el ${escapeHtml(itcDateTime(item.closedAt))}.`:'Los datos de esta sección se guardan únicamente en este navegador.'}</span><div class="itc-detail-footer-actions"><button type="button" class="itc-delete-button" data-itc-delete="${escapeHtml(item.id)}">Eliminar caso</button><button type="submit" class="secondary-button">Guardar datos</button></div></footer></section></form><section class="itc-detail-section itc-conversation"><header><span>02</span><div><h3>Conversación</h3><p>${comments.length?`${comments.length} ${comments.length===1?'comentario registrado':'comentarios registrados'}`:'Todavía no hay comentarios'}</p></div></header><div class="itc-comments">${comments.length?comments.map(comment=>`<article class="itc-comment ${comment.authorOrg.toLowerCase()}"><div class="itc-comment-meta"><strong>${escapeHtml(comment.authorOrg)}</strong><time>${escapeHtml(itcDateTime(comment.at))}</time></div><p>${escapeHtml(comment.text)}</p></article>`).join(''):`<div class="itc-comments-empty"><span aria-hidden="true">…</span><p>Registrá el primer mensaje para dejar trazabilidad del intercambio.</p></div>`}</div><form class="itc-comment-form" data-itc-comment-form="${escapeHtml(item.id)}"><label><span>Quién escribe la respuesta</span><select name="authorOrg">${ITC_ORGANIZATIONS.map(value=>`<option value="${escapeHtml(value)}" ${item.responsible===value?'selected':''}>${escapeHtml(value)}</option>`).join('')}</select></label><label class="itc-comment-text"><span>Comentario</span><textarea name="text" rows="4" placeholder="Escribí la consulta, respuesta o seguimiento..." required></textarea></label><div class="itc-comment-actions"><small>Después de guardar, el responsable pasa automáticamente a la otra organización.</small><button type="submit" class="primary-button">Agregar comentario</button></div></form></section></aside></div>`;
+  return `<div class="itc-sheet-backdrop" role="dialog" aria-modal="true" aria-labelledby="itcSheetTitle"><aside class="itc-sheet"><header class="itc-sheet-header"><div class="itc-sheet-mark" aria-hidden="true"><span>TOYOTA</span><small>ITC</small></div><div><span>FICHA DE SEGUIMIENTO</span><h2 id="itcSheetTitle">${escapeHtml(item.id)}</h2><p>Conversación operativa entre Amiun y Toyota</p></div><button type="button" class="itc-close" data-itc-close aria-label="Cerrar ficha">×</button></header><form class="itc-detail-form" data-itc-detail-form="${escapeHtml(item.id)}"><section class="itc-detail-section"><header><span>01</span><div><h3>Datos del caso</h3><p>Información operativa del intercambio con Toyota.</p></div></header><div class="itc-detail-grid"><label><span>Fecha</span><input type="date" name="date" value="${escapeHtml(item.date)}" required></label><label><span>Prioridad</span><select name="priority">${ITC_PRIORITIES.map(value=>`<option value="${escapeHtml(value)}" ${item.priority===value?'selected':''}>${escapeHtml(value)}</option>`).join('')}</select></label><label class="itc-detail-vin-field"><span>VIN</span><input name="vin" maxlength="17" value="${escapeHtml(item.vin)}" placeholder="Ingresá el VIN" required></label><label class="itc-detail-status-field"><span>Estado</span><select name="status">${ITC_STATUSES.map(value=>`<option value="${escapeHtml(value)}" ${item.status===value?'selected':''}>${escapeHtml(value)}</option>`).join('')}</select></label></div><footer><span>${item.closedAt?`Cerrado el ${escapeHtml(itcDateTime(item.closedAt))}.`:'Este ITC se comparte entre usuarios y computadoras.'}</span><div class="itc-detail-footer-actions"><button type="button" class="itc-delete-button" data-itc-delete="${escapeHtml(item.id)}">Eliminar caso</button><button type="submit" class="secondary-button">Guardar datos</button></div></footer></section></form><section class="itc-detail-section itc-conversation"><header><span>02</span><div><h3>Conversación</h3><p>${comments.length?`${comments.length} ${comments.length===1?'comentario registrado':'comentarios registrados'}`:'Todavía no hay comentarios'}</p></div></header><div class="itc-comments">${comments.length?comments.map(comment=>`<article class="itc-comment ${comment.authorOrg.toLowerCase()}"><div class="itc-comment-meta"><strong>${escapeHtml(comment.authorOrg)}</strong><time>${escapeHtml(itcDateTime(comment.at))}</time></div><p>${escapeHtml(comment.text)}</p></article>`).join(''):`<div class="itc-comments-empty"><span aria-hidden="true">…</span><p>Registrá el primer mensaje para dejar trazabilidad del intercambio.</p></div>`}</div><form class="itc-comment-form" data-itc-comment-form="${escapeHtml(item.id)}"><label><span>Quién escribe la respuesta</span><select name="authorOrg">${ITC_ORGANIZATIONS.map(value=>`<option value="${escapeHtml(value)}" ${item.responsible===value?'selected':''}>${escapeHtml(value)}</option>`).join('')}</select></label><label class="itc-comment-text"><span>Comentario</span><textarea name="text" rows="4" placeholder="Escribí la consulta, respuesta o seguimiento..." required></textarea></label><div class="itc-comment-actions"><small>Después de guardar, el responsable pasa automáticamente a la otra organización.</small><button type="submit" class="primary-button">Agregar comentario</button></div></form></section></aside></div>`;
 }
 function buildItcActiveReportHtml(){
   const active=itcCases.filter(item=>item.status==='Activo').sort((a,b)=>String(a.date||'').localeCompare(String(b.date||''))||String(a.id).localeCompare(String(b.id)));
@@ -2178,7 +2292,7 @@ function buildItcActiveReportHtml(){
 function openItcActiveReport(){openReportPreview(prepareBrowserPrintHtml(buildItcActiveReportHtml()));toast(`Reporte de ITC activos generado: ${itcCases.filter(item=>item.status==='Activo').length} casos`)}
 function itcView(){
   const items=itcFilteredCases();
-  return `${heading('ITC','Seguimiento trazable de las conversaciones entre Amiun y Toyota.','SEGUIMIENTO ENTRE ORGANIZACIONES')}<section class="itc-command"><div><span>CONTROL DE INTERCAMBIOS</span><strong>Una ficha por consulta, una conversación completa</strong><p>Registrá cada respuesta, identificá quién debe actuar y cerrá el caso cuando la gestión finalice. Estos registros quedan separados de Base de datos y se guardan únicamente en este navegador.</p></div><div class="itc-command-actions"><button type="button" class="secondary-button" data-itc-active-report>Reporte de activos</button><button type="button" class="primary-button" data-itc-new><span>＋</span> Nuevo ITC</button></div></section>${itcSummary(items)}<section class="itc-workbench"><div class="itc-filters"><label class="itc-search"><span>Buscar</span><input id="itcSearch" type="search" value="${escapeHtml(itcSearch)}" placeholder="VIN o número de ITC"></label><label><span>Estado</span><select id="itcStatusFilter"><option value="all" ${itcStatusFilter==='all'?'selected':''}>Todos</option><option value="Activo" ${itcStatusFilter==='Activo'?'selected':''}>Activos</option><option value="Cerrado" ${itcStatusFilter==='Cerrado'?'selected':''}>Cerrados</option></select></label><output>${items.length} ${items.length===1?'caso visible':'casos visibles'}</output></div><section class="panel itc-panel">${itcTable(items)}</section></section>${itcDetailSheet()}`;
+  return `${heading('ITC','Seguimiento trazable de las conversaciones entre Amiun y Toyota.','SEGUIMIENTO ENTRE ORGANIZACIONES')}<section class="itc-command"><div><span>CONTROL DE INTERCAMBIOS</span><strong>Una ficha por consulta, una conversación completa</strong><p>Registrá cada respuesta, identificá quién debe actuar y cerrá el caso cuando la gestión finalice. Estos registros quedan separados de Base de datos y se comparten entre usuarios y computadoras.</p></div><div class="itc-command-actions"><button type="button" class="secondary-button" data-itc-active-report>Reporte de activos</button><button type="button" class="primary-button" data-itc-new><span>＋</span> Nuevo ITC</button></div></section>${itcSummary(items)}<section class="itc-workbench"><div class="itc-filters"><label class="itc-search"><span>Buscar</span><input id="itcSearch" type="search" value="${escapeHtml(itcSearch)}" placeholder="VIN o número de ITC"></label><label><span>Estado</span><select id="itcStatusFilter"><option value="all" ${itcStatusFilter==='all'?'selected':''}>Todos</option><option value="Activo" ${itcStatusFilter==='Activo'?'selected':''}>Activos</option><option value="Cerrado" ${itcStatusFilter==='Cerrado'?'selected':''}>Cerrados</option></select></label><output>${items.length} ${items.length===1?'caso visible':'casos visibles'}</output></div><section class="panel itc-panel">${itcTable(items)}</section></section>${itcDetailSheet()}`;
 }
 function dashboard(){const scoped=branchVisibleCases(cases);const pending=scoped.filter(c=>c.status==='PENDIENTE DE REPUESTO').length,noTurn=scoped.filter(c=>c.arrived&&!c.vor&&!c.appointmentDate).length,upcoming=scoped.filter(c=>c.status==='PROGRAMADO').length,alerts=scoped.filter(c=>c.status==='TURNO SIN REPUESTO'||c.vor&&c.arrived).length,delayed=scoped.filter(c=>c.requested&&!c.arrived&&daysFrom(c.requestDate)>10).length;return `${heading('Buen día, Felipe','Lo importante del circuito, ordenado para actuar.','CENTRO DE CONTROL')}<section class="stats"><article class="stat"><div class="stat-top"><span>Repuestos pendientes</span><span class="stat-icon">◇</span></div><strong>${pending}</strong><small>${delayed} con más de 10 días</small></article><article class="stat"><div class="stat-top"><span>Sin turno asignado</span><span class="stat-icon">◷</span></div><strong>${noTurn}</strong><small class="good">Listos para contactar</small></article><article class="stat"><div class="stat-top"><span>Turnos programados</span><span class="stat-icon">□</span></div><strong>${upcoming}</strong><small>Próximos 7 días</small></article><article class="stat attention"><div class="stat-top"><span>Requieren atención</span><span class="stat-icon">△</span></div><strong>${alerts}</strong><small>VOR o turno sin repuesto</small></article></section><section class="flow-strip" aria-label="Estado del flujo"><div class="flow-step"><span>Ingreso</span><strong>${cases.length} casos activos</strong></div><div class="flow-step ${delayed?'blocked':''}"><span>Espera de repuesto</span><strong>${delayed?`${delayed} con demora`:'Flujo normal'}</strong></div><div class="flow-step"><span>Coordinación</span><strong>${noTurn} por contactar</strong></div><div class="flow-step ${alerts?'blocked':''}"><span>Bloqueos</span><strong>${alerts} requieren acción</strong></div></section><div class="content-grid"><section class="panel"><header class="panel-header"><div><h2>Casos prioritarios</h2><p>Ordenados por urgencia y antigüedad</p></div><button class="text-button" data-go="database">Ver todos</button></header>${table(filtered([...cases].sort((a,b)=>(a.priority==='Urgente'?-2:a.priority==='Alta'?-1:0)-(b.priority==='Urgente'?-2:b.priority==='Alta'?-1:0)).slice(0,5)))}</section><aside class="panel"><header class="panel-header"><div><h2>Actividad reciente</h2><p>Actualizaciones del circuito</p></div></header><div class="activity-list"><div class="activity"><span class="activity-icon">✓</span><p><strong>Arribó un repuesto</strong><br>OR-2481 pasó a pendiente de turno<time>Hace 26 minutos</time></p></div><div class="activity"><span class="activity-icon">□</span><p><strong>Turno confirmado</strong><br>OR-2476 para ${fmtDate(iso(2))}<time>Hace 1 hora</time></p></div><div class="activity"><span class="activity-icon">△</span><p><strong>Alerta de repuesto</strong><br>OR-2468 conserva un turno activo<time>Hace 3 horas</time></p></div><div class="activity"><span class="activity-icon">⚑</span><p><strong>Caso VOR ingresado</strong><br>OR-2472 continúa sin avisar<time>Ayer</time></p></div></div></aside></div>`}
 function average(values){const valid=values.filter(Number.isFinite);return valid.length?Math.round(valid.reduce((a,b)=>a+b,0)/valid.length):0}
@@ -2208,7 +2322,7 @@ function openItcCreateDialog(){
   backdrop.querySelector('[data-itc-create-form]').onsubmit=event=>{event.preventDefault();createItcCase(event.currentTarget)};
   backdrop.querySelector('[name="vin"]')?.focus();
 }
-function createItcCase(form){
+async function createItcCase(form){
   const data=new FormData(form),vin=String(data.get('vin')||'').trim().toUpperCase(),text=String(data.get('text')||'').trim(),id=String(data.get('id')||'').trim();
   if(!vin){form.elements.vin.focus();return}
   if(!text){form.elements.text.focus();return}
@@ -2218,12 +2332,13 @@ function createItcCase(form){
   const item=normalizeItcCase({id,date:String(data.get('date')||iso(0)),createdAt:now,updatedAt:now,priority:data.get('priority'),vin,responsible:'Toyota',status:'Activo',closedAt:'',resolution:'',comments:[{at:now,authorOrg:'Amiun',text}]});
   itcCases.unshift(item);
   saveItcCases();
+  const remoteSaved=await upsertItcRemoteCase(item);
   document.querySelector('.itc-create-backdrop')?.remove();
   selectedItcId=item.id;
-  toast('ITC creado en este navegador');
+  toast(remoteSaved?'ITC creado y compartido con los usuarios':'ITC creado localmente; se sincronizará al recuperar la conexión');
   render();
 }
-function updateItcCase(form){
+async function updateItcCase(form){
   const item=itcCaseById(form.dataset.itcDetailForm);
   if(!item)return;
   const data=new FormData(form),vin=String(data.get('vin')||'').trim().toUpperCase(),nextStatus=ITC_STATUSES.includes(data.get('status'))?data.get('status'):item.status;
@@ -2232,21 +2347,23 @@ function updateItcCase(form){
   const lastComment=item.comments.at(-1),responsible=lastComment?(lastComment.authorOrg==='Amiun'?'Toyota':'Amiun'):item.responsible;
   Object.assign(item,{date:String(data.get('date')||item.date),priority:ITC_PRIORITIES.includes(data.get('priority'))?data.get('priority'):item.priority,vin,responsible,status:nextStatus,closedAt:nextStatus==='Cerrado'?(item.status==='Cerrado'&&item.closedAt?item.closedAt:now):'',updatedAt:now});
   saveItcCases();
-  toast('Datos del ITC guardados en este navegador');
+  const remoteSaved=await upsertItcRemoteCase(item);
+  toast(remoteSaved?'Datos del ITC compartidos':'Datos guardados localmente; se sincronizarán al recuperar la conexión');
   render();
 }
-function deleteItcCase(id){
+async function deleteItcCase(id){
   const index=itcCases.findIndex(item=>item.id===id);
   if(index<0)return;
   const item=itcCases[index];
   if(!confirm(`¿Eliminar definitivamente el ITC ${item.id}? Esta acción quitará la ficha y su conversación de este navegador.`))return;
+  if(!(await deleteItcRemoteCase(id))){toast('No se pudo eliminar el ITC compartido. No se quitó la copia local.');return}
   itcCases.splice(index,1);
   saveItcCases();
   selectedItcId='';
   toast(`ITC ${item.id} eliminado`);
   render();
 }
-function addItcComment(form){
+async function addItcComment(form){
   const item=itcCaseById(form.dataset.itcCommentForm),data=new FormData(form),text=String(data.get('text')||'').trim();
   if(!item||!text)return;
   const authorOrg=ITC_ORGANIZATIONS.includes(data.get('authorOrg'))?data.get('authorOrg'):'Amiun',now=new Date().toISOString();
@@ -2254,7 +2371,8 @@ function addItcComment(form){
   item.responsible=authorOrg==='Amiun'?'Toyota':'Amiun';
   item.updatedAt=now;
   saveItcCases();
-  toast('Comentario ITC guardado en este navegador');
+  const remoteSaved=await upsertItcRemoteCase(item);
+  toast(remoteSaved?'Comentario guardado y compartido':'Comentario guardado localmente; se sincronizará al recuperar la conexión');
   render();
 }
 function bindItcView(){
@@ -3363,7 +3481,7 @@ function bindGoNavigation(){document.querySelectorAll('[data-go]').forEach(butto
 function bindInteractiveTables(){[['accesos internos',bindGoNavigation],['acciones',bindRowActions],['repuestos',bindPartsControls],['turnos',bindTurnControls],['recordatorios',bindReminders],['ITC',bindItcView],['vistas especiales',bindSpecialViews],['controles de reporte semanal',injectWeeklyReportControls],['reportes',bindReportControls],['filtros de turnos',bindTurnViewControls],['filtros de repuestos',bindPartsViewControls],['filtros VOR',bindVorViewControls],['resumen',bindSummaryControls],['calendario',bindCalendarControls],['ficha de base de datos',bindDatabaseSheet],['paginación de base de datos',bindDatabasePagination],['ficha de turnos',bindTurnSheet],['ficha sin repuestos',bindMissingSheet],['selección de filas',bindTableRowSelection],['configuración',bindSettings],['reporte de ejecución semanal',injectExecutionWeeklyReportControls],['ejecución de turnos',bindTodayAppointments],['reporte de depósito',injectDepositReportControls],['registro de repuestos',bindPartsRegistry],['decisiones de coordinación',injectSeparateCoordinationDetails],['identificación Toyota 10',highlightToyota10Fields]].forEach(([name,binder])=>safelyBind(name,binder))}
 const bindInteractiveTablesCore=bindInteractiveTables;
 bindInteractiveTables=function(){bindInteractiveTablesCore();safelyBind('sección de historial',bindHistoryView)};
-function render(){if(currentView==='management')currentView='database';renderNav();const view=views.find(v=>v.id===currentView),group=['dashboard','database','reminders'].includes(currentView)?'General':['parts','appointments','calendar','today-appointments','parts-registry'].includes(currentView)?'Operación':currentView==='itc'?'Seguimiento':currentView==='settings'?'Sistema':'Excepciones';document.getElementById('breadcrumb').textContent=`Garantías / ${group}`;document.getElementById('currentSection').textContent=view?.label||'Resumen';document.getElementById('newCaseButton').hidden=currentView==='database'||currentView==='reminders'||currentView==='settings'||currentView==='today-appointments'||currentView==='parts-registry'||currentView==='itc';page.innerHTML=currentView==='dashboard'?dashboardV2():listView();document.querySelectorAll('[data-go]').forEach(b=>b.onclick=()=>{if(b.dataset.go==='no-appointments'){currentView='appointments';turnFilter='without'}else{currentView=b.dataset.go}render()});bindInteractiveTables();renderPendingResultAlerts();const pf=document.getElementById('priorityFilter');if(pf)pf.onchange=()=>{let base=filtered(getViewCases(currentView));if(currentView==='appointments')base=filterTurns(base);if(currentView==='parts')base=filterParts(base);if(currentView==='vor')base=filterVor(base);const items=pf.value?base.filter(c=>c.priority===pf.value):base;document.getElementById('caseTable').innerHTML=viewTable(items);bindInteractiveTables()}}
+function render(){if(currentView==='management')currentView='database';renderNav();const view=views.find(v=>v.id===currentView),group=['dashboard','database','reminders'].includes(currentView)?'General':['parts','appointments','calendar','today-appointments','parts-registry'].includes(currentView)?'Operación':currentView==='itc'?'Seguimiento':currentView==='settings'?'Sistema':'Excepciones';document.getElementById('breadcrumb').textContent=`Garantías / ${group}`;document.getElementById('currentSection').textContent=view?.label||'Resumen';document.getElementById('newCaseButton').hidden=currentView==='database'||currentView==='reminders'||currentView==='settings'||currentView==='today-appointments'||currentView==='parts-registry'||currentView==='itc';page.innerHTML=currentView==='dashboard'?dashboardV2():listView();document.querySelectorAll('[data-go]').forEach(b=>b.onclick=()=>{if(b.dataset.go==='no-appointments'){currentView='appointments';turnFilter='without'}else{currentView=b.dataset.go}render()});bindInteractiveTables();renderPendingResultAlerts();const pf=document.getElementById('priorityFilter');if(pf)pf.onchange=()=>{let base=filtered(getViewCases(currentView));if(currentView==='appointments')base=filterTurns(base);if(currentView==='parts')base=filterParts(base);if(currentView==='vor')base=filterVor(base);const items=pf.value?base.filter(c=>c.priority===pf.value):base;document.getElementById('caseTable').innerHTML=viewTable(items);bindInteractiveTables()};queueItcRemoteSync()}
 const renderCore=render;
 render=function(){try{return renderCore()}catch(error){console.error('[Interfaz] Error al mostrar la sección',currentView,error);renderNav();page.innerHTML=`<section class="panel interface-error"><h2>No se pudo mostrar esta sección</h2><p>La navegación continúa disponible. Podés volver a intentar sin perder los datos.</p><button class="primary-button" id="retryInterface" type="button">Reintentar</button></section>`;document.getElementById('retryInterface')?.addEventListener('click',()=>render());}}
 const renderWithHistoryContext=render;
