@@ -902,6 +902,7 @@ let pendingTurnAlertsExpanded = true;
 let pendingDepositAlertsExpanded = true;
 let pendingReminderAlertsExpanded = true;
 let pendingPartCodeAlertsExpanded = true;
+let pendingItcAlertsExpanded = true;
 let reminderStatusFilter = 'active';
 let reminderCategoryFilter = '';
 let reminderSearch = '';
@@ -1301,6 +1302,7 @@ let itcCases=loadStoredArray(ITC_STORAGE_KEY,[]).map(normalizeItcCase);
 const saveItcCases=()=>localStorage.setItem(ITC_STORAGE_KEY,JSON.stringify(itcCases));
 let itcRemoteSyncBusy=false;
 let itcRemoteSyncTimer=0;
+let itcRemoteLastSyncAt=0;
 const itcRemoteEnabled=()=>Boolean(amiunSupabaseClient&&amiunCustomSessionToken);
 const itcRemoteRequest=async(path,options={})=>{
   if(!itcRemoteEnabled())return null;
@@ -1402,12 +1404,12 @@ async function syncItcCasesFromSupabase(){
     const next=merged.sort((a,b)=>String(b.updatedAt||b.date).localeCompare(String(a.updatedAt||a.date)));
     const changed=JSON.stringify(next)!==JSON.stringify(itcCases);
     itcCases=next;saveItcCases();
-    if(changed&&currentView==='itc')render();
+    if(changed){if(currentView==='itc')render();else renderPendingResultAlerts()}
   }catch(error){console.warn('[ITC] No se pudieron cargar los casos compartidos',error)}
-  finally{itcRemoteSyncBusy=false}
+  finally{itcRemoteSyncBusy=false;itcRemoteLastSyncAt=Date.now()}
 }
 function queueItcRemoteSync(){
-  if(currentView!=='itc'||!itcRemoteEnabled()||itcRemoteSyncBusy)return;
+  if(!itcRemoteEnabled()||itcRemoteSyncBusy||Date.now()-itcRemoteLastSyncAt<30000)return;
   clearTimeout(itcRemoteSyncTimer);
   itcRemoteSyncTimer=setTimeout(()=>syncItcCasesFromSupabase(),0);
 }
@@ -1824,6 +1826,18 @@ function partCodePendingHours(c,now=Date.now()){
 function pendingPartCodeCases(now=Date.now()){
   return branchVisibleCases(cases).filter(c=>c.status!=='DADO DE BAJA'&&c.requested&&!String(c.partCode||'').trim()&&now-partCodeReferenceTime(c)>PART_CODE_ALERT_AFTER_MS).sort((a,b)=>partCodeReferenceTime(a)-partCodeReferenceTime(b));
 }
+const ITC_ALERT_AFTER_DAYS=2;
+function itcLastComment(item){return [...(item?.comments||[])].sort((a,b)=>String(a.at||'').localeCompare(String(b.at||''))).at(-1)||null}
+function itcCommentAgeDays(item,today=iso(0)){
+  const last=itcLastComment(item),lastDay=String(last?.at||'').slice(0,10);
+  if(!lastDay)return 0;
+  const from=new Date(`${lastDay}T12:00:00`),to=new Date(`${today}T12:00:00`);
+  if(Number.isNaN(from.getTime())||Number.isNaN(to.getTime()))return 0;
+  return Math.max(0,Math.floor((to-from)/86400000));
+}
+function pendingItcAlerts(){
+  return canAccessView('itc')?itcCases.filter(item=>item.status==='Activo'&&itcCommentAgeDays(item)>=ITC_ALERT_AFTER_DAYS).sort((a,b)=>itcCommentAgeDays(b)-itcCommentAgeDays(a)||String(a.id).localeCompare(String(b.id))):[];
+}
 function renderPendingResultAlerts(){
   const control=document.getElementById('pendingAlertControl'),button=document.getElementById('pendingAlertButton'),panel=document.getElementById('pendingAlertPanel'),count=document.getElementById('pendingAlertCount'),total=document.getElementById('pendingAlertTotal'),list=document.getElementById('pendingAlertList');
   if(!control||!button||!panel||!count||!total||!list)return;
@@ -1831,8 +1845,9 @@ function renderPendingResultAlerts(){
   const pendingDeposits=canAccessView('parts-registry')?pendingDepositClassifications():[];
   const pendingReminders=canAccessView('reminders')?reminderAlertItems():[];
   const pendingPartCodes=canAccessView('parts')?pendingPartCodeCases():[];
-  const pendingTotal=pendingTurns.length+pendingDeposits.length+pendingReminders.length+pendingPartCodes.length;
-  control.hidden=!canAccessView('today-appointments')&&!canAccessView('parts-registry')&&!canAccessView('reminders')&&!canAccessView('parts');
+  const pendingItcs=pendingItcAlerts();
+  const pendingTotal=pendingTurns.length+pendingDeposits.length+pendingReminders.length+pendingPartCodes.length+pendingItcs.length;
+  control.hidden=!canAccessView('today-appointments')&&!canAccessView('parts-registry')&&!canAccessView('reminders')&&!canAccessView('parts')&&!canAccessView('itc');
   count.textContent=String(pendingTotal);
   count.hidden=pendingTotal===0;
   total.textContent=String(pendingTotal);
@@ -1844,10 +1859,11 @@ function renderPendingResultAlerts(){
   const partCodeGroup=pendingPartCodes.length?`<section class="pending-alert-group is-warning part-code-alert-group ${pendingPartCodeAlertsExpanded?'is-expanded':'is-collapsed'}" aria-labelledby="pendingPartCodeTitle"><header><button class="pending-alert-group-toggle" type="button" data-toggle-alert-group="part-code" aria-expanded="${pendingPartCodeAlertsExpanded}" aria-controls="pendingPartCodeAlertsBody"><div><span>CÓDIGO DE REPUESTO</span><strong id="pendingPartCodeTitle">Más de 24 h sin código</strong></div><span class="pending-alert-group-controls"><output>${pendingPartCodes.length}</output><span class="pending-alert-toggle-label">${pendingPartCodeAlertsExpanded?'Ocultar':'Mostrar'}</span><span class="pending-alert-chevron" aria-hidden="true">⌄</span></span></button></header><div class="pending-alert-group-body" id="pendingPartCodeAlertsBody" ${pendingPartCodeAlertsExpanded?'':'hidden'}><p>Casos creados hace más de 24 horas que todavía no tienen código cargado en Repuestos.</p><div class="pending-alert-group-items">${pendingPartCodes.slice(0,5).map(c=>`<button type="button" data-pending-part-code-order="${escapeHtml(c.order)}"><span class="pending-alert-item-mark" aria-hidden="true">!</span><span><strong>${escapeHtml(c.order)} <i>${escapeHtml(c.plate||'Sin patente')}</i></strong><small>${escapeHtml(c.part||'Repuesto sin especificar')} · ${partCodePendingHours(c)} h sin código</small></span><b>Completar</b></button>`).join('')}</div><button class="pending-alert-group-action" type="button" data-review-part-codes>Ir a Repuestos <span aria-hidden="true">→</span></button></div></section>`:'';
   const depositGroup=pendingDeposits.length?`<section class="pending-alert-group is-warning ${pendingDepositAlertsExpanded?'is-expanded':'is-collapsed'}" aria-labelledby="pendingDepositTitle"><header><button class="pending-alert-group-toggle" type="button" data-toggle-alert-group="deposit" aria-expanded="${pendingDepositAlertsExpanded}" aria-controls="pendingDepositAlertsBody"><div><span>CLASIFICACIÓN DE DEPÓSITO</span><strong id="pendingDepositTitle">Ubicación o condición pendiente</strong></div><span class="pending-alert-group-controls"><output>${pendingDeposits.length}</output><span class="pending-alert-toggle-label">${pendingDepositAlertsExpanded?'Ocultar':'Mostrar'}</span><span class="pending-alert-chevron" aria-hidden="true">⌄</span></span></button></header><div class="pending-alert-group-body" id="pendingDepositAlertsBody" ${pendingDepositAlertsExpanded?'':'hidden'}><p>Repuestos reparados todavía en “Seleccionar estado”.</p><div class="pending-alert-group-items">${pendingDeposits.slice(0,5).map(item=>{const order=item.order||item.sourceOrder||'Sin N.º OR';return `<button type="button" data-pending-deposit-key="${escapeHtml(item.key)}"><span class="pending-alert-item-mark" aria-hidden="true">!</span><span><strong>${escapeHtml(order)} <i>${escapeHtml(item.partCode||'Sin código')}</i></strong><small>${escapeHtml(item.part||'Repuesto sin especificar')} · ${fmtDate(item.repairDate)}</small></span><b>Clasificar</b></button>`}).join('')}</div><button class="pending-alert-group-action" type="button" data-review-deposit-results>Ir a Depósito <span aria-hidden="true">→</span></button></div></section>`:'';
   const reminderGroup=pendingReminders.length?`<section class="pending-alert-group is-information ${pendingReminderAlertsExpanded?'is-expanded':'is-collapsed'}" aria-labelledby="pendingReminderTitle"><header><button class="pending-alert-group-toggle" type="button" data-toggle-alert-group="reminders" aria-expanded="${pendingReminderAlertsExpanded}" aria-controls="pendingReminderAlertsBody"><div><span>AGENDA OPERATIVA</span><strong id="pendingReminderTitle">Recordatorios para atender</strong></div><span class="pending-alert-group-controls"><output>${pendingReminders.length}</output><span class="pending-alert-toggle-label">${pendingReminderAlertsExpanded?'Ocultar':'Mostrar'}</span><span class="pending-alert-chevron" aria-hidden="true">⌄</span></span></button></header><div class="pending-alert-group-body" id="pendingReminderAlertsBody" ${pendingReminderAlertsExpanded?'':'hidden'}><p>Compromisos vencidos, para hoy o dentro de su aviso anticipado.</p><div class="pending-alert-group-items">${pendingReminders.slice(0,5).map(item=>{const state=reminderDayState(item),stateLabel=state==='overdue'?'Vencido':state==='today'?'Hoy':'Próximo';return `<button type="button" data-pending-reminder-id="${escapeHtml(item.id)}"><span class="pending-alert-item-mark" aria-hidden="true">${state==='overdue'?'!':'•'}</span><span><strong>${escapeHtml(item.title)} <i>${escapeHtml(item.order||item.plate||'Sin caso')}</i></strong><small>${stateLabel} · ${fmtDate(item.date)} · ${escapeHtml(item.time||'Sin hora')} · ${escapeHtml(item.responsible||'Sin asignar')}</small></span><b>Ver</b></button>`}).join('')}</div><button class="pending-alert-group-action" type="button" data-review-reminders>Ir a Recordatorios <span aria-hidden="true">→</span></button></div></section>`:'';
-  list.innerHTML=pendingTotal?turnGroup+partCodeGroup+depositGroup+reminderGroup:`<div class="pending-alert-empty"><strong>Todo bajo control</strong><span>No hay códigos, resultados, clasificaciones ni recordatorios pendientes.</span></div>`;
+  const itcGroup=pendingItcs.length?`<section class="pending-alert-group is-warning ${pendingItcAlertsExpanded?'is-expanded':'is-collapsed'}" aria-labelledby="pendingItcTitle"><header><button class="pending-alert-group-toggle" type="button" data-toggle-alert-group="itc" aria-expanded="${pendingItcAlertsExpanded}" aria-controls="pendingItcAlertsBody"><div><span>SEGUIMIENTO ITC</span><strong id="pendingItcTitle">Sin respuesta de Toyota o Amiun</strong></div><span class="pending-alert-group-controls"><output>${pendingItcs.length}</output><span class="pending-alert-toggle-label">${pendingItcAlertsExpanded?'Ocultar':'Mostrar'}</span><span class="pending-alert-chevron" aria-hidden="true">⌄</span></span></button></header><div class="pending-alert-group-body" id="pendingItcAlertsBody" ${pendingItcAlertsExpanded?'':'hidden'}><p>ITC activos con dos días o más desde el último comentario.</p><div class="pending-alert-group-items">${pendingItcs.slice(0,5).map(item=>{const last=itcLastComment(item),age=itcCommentAgeDays(item);return `<button type="button" data-pending-itc-id="${escapeHtml(item.id)}"><span class="pending-alert-item-mark" aria-hidden="true">!</span><span><strong>${escapeHtml(item.id)} <i>${escapeHtml(item.vin||'Sin VIN')}</i></strong><small>${escapeHtml(item.priority)} · ${age} días sin respuesta · Debe responder: ${escapeHtml(item.responsible)}${last?.authorOrg?` · Último: ${escapeHtml(last.authorOrg)}`:''}</small></span><b>Revisar</b></button>`}).join('')}</div><button class="pending-alert-group-action" type="button" data-review-itcs>Ir a ITC <span aria-hidden="true">→</span></button></div></section>`:'';
+  list.innerHTML=pendingTotal?turnGroup+partCodeGroup+depositGroup+itcGroup+reminderGroup:`<div class="pending-alert-empty"><strong>Todo bajo control</strong><span>No hay códigos, resultados, clasificaciones, ITC ni recordatorios pendientes.</span></div>`;
   button.onclick=event=>{event.stopPropagation();pendingResultsOpen=!pendingResultsOpen;renderPendingResultAlerts()};
   panel.onclick=event=>event.stopPropagation();
-  panel.querySelectorAll('[data-toggle-alert-group]').forEach(toggle=>toggle.onclick=()=>{if(toggle.dataset.toggleAlertGroup==='turns')pendingTurnAlertsExpanded=!pendingTurnAlertsExpanded;else if(toggle.dataset.toggleAlertGroup==='part-code')pendingPartCodeAlertsExpanded=!pendingPartCodeAlertsExpanded;else if(toggle.dataset.toggleAlertGroup==='deposit')pendingDepositAlertsExpanded=!pendingDepositAlertsExpanded;else pendingReminderAlertsExpanded=!pendingReminderAlertsExpanded;renderPendingResultAlerts()});
+  panel.querySelectorAll('[data-toggle-alert-group]').forEach(toggle=>toggle.onclick=()=>{if(toggle.dataset.toggleAlertGroup==='turns')pendingTurnAlertsExpanded=!pendingTurnAlertsExpanded;else if(toggle.dataset.toggleAlertGroup==='part-code')pendingPartCodeAlertsExpanded=!pendingPartCodeAlertsExpanded;else if(toggle.dataset.toggleAlertGroup==='deposit')pendingDepositAlertsExpanded=!pendingDepositAlertsExpanded;else if(toggle.dataset.toggleAlertGroup==='itc')pendingItcAlertsExpanded=!pendingItcAlertsExpanded;else pendingReminderAlertsExpanded=!pendingReminderAlertsExpanded;renderPendingResultAlerts()});
   panel.querySelectorAll('[data-pending-result-date]').forEach(item=>item.onclick=()=>{pendingResultsOpen=false;selectedExecutionDate=item.dataset.pendingResultDate;navigateToView('today-appointments')});
   panel.querySelector('[data-review-turn-results]')?.addEventListener('click',()=>{pendingResultsOpen=false;selectedExecutionDate=pendingTurns[0].appointmentDate;navigateToView('today-appointments')});
   const openPartCodeCase=async order=>{pendingResultsOpen=false;navigateToView('parts');if(!(await acquireCaseLock(order,'Repuestos')))return;selectedPartCommentOrder=order;render();setTimeout(()=>document.querySelector('[data-part-code-form] input')?.focus(),0)};
@@ -1857,6 +1873,8 @@ function renderPendingResultAlerts(){
   panel.querySelector('[data-review-deposit-results]')?.addEventListener('click',()=>{pendingResultsOpen=false;registryMode='deposit';depositStatusFilter='SIN CLASIFICAR';depositQuery='';navigateToView('parts-registry')});
   panel.querySelectorAll('[data-pending-reminder-id]').forEach(item=>item.onclick=()=>{const reminder=reminders.find(entry=>entry.id===item.dataset.pendingReminderId);pendingResultsOpen=false;reminderStatusFilter='active';reminderSearch=reminder?.title||'';navigateToView('reminders')});
   panel.querySelector('[data-review-reminders]')?.addEventListener('click',()=>{pendingResultsOpen=false;reminderStatusFilter='active';reminderSearch='';navigateToView('reminders')});
+  panel.querySelectorAll('[data-pending-itc-id]').forEach(item=>item.onclick=()=>{pendingResultsOpen=false;navigateToView('itc');selectedItcId=item.dataset.pendingItcId;render()});
+  panel.querySelector('[data-review-itcs]')?.addEventListener('click',()=>{pendingResultsOpen=false;navigateToView('itc')});
 }
 function renderNav(){const allowed=views.filter(v=>canAccessView(v.id));document.getElementById('navigation').innerHTML=allowed.map(v=>`${v.group?`<div class="nav-group">${v.group}</div>`:''}<button class="nav-item ${currentView===v.id?'active':''}" data-view="${v.id}" aria-label="${escapeHtml(v.label)}" title="${escapeHtml(v.label)}"><span class="nav-icon" aria-hidden="true"><span>${v.icon}</span></span><span class="nav-label">${v.label}</span>${navCount(v.id)!==''?`<span class="nav-count">${navCount(v.id)}</span>`:''}</button>`).join('');document.querySelectorAll('[data-view]').forEach(button=>button.onclick=()=>navigateToView(button.dataset.view))}
 function actionFor(c){if(c.status==='RESULTADO PENDIENTE')return 'Registrar resultado';if(c.requested&&!c.arrived)return 'Confirmar arribo';if(c.arrived&&!c.vor&&!plateReady(c))return 'Esperar otros repuestos';if(c.arrived&&!c.appointmentDate&&!c.vor)return 'Asignar turno';return 'Ver detalle'}
