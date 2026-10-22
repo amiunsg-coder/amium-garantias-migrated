@@ -4987,3 +4987,94 @@ body[data-theme="dark"] .itc-comment-form { background: var(--surface); }
   .itc-command { min-height: 54px; padding: 7px 10px; }
   .itc-summary article { min-height: 47px; padding: 6px 8px; }
 }
+
+/* ITC: una sola franja de control y desplazamiento completo de la tabla. */
+.itc-overview {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(86px, 1fr)) minmax(150px, 2.1fr) 74px 70px minmax(150px, auto);
+  align-items: stretch;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.itc-overview .itc-summary { display: contents; }
+.itc-overview .itc-summary article {
+  min-width: 0;
+  min-height: 58px;
+  padding: 7px 9px;
+}
+.itc-overview .itc-summary article > span {
+  display: block;
+  overflow: hidden;
+  font-size: 8px;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.itc-overview .itc-summary article strong { margin-top: 3px; font-size: 19px; }
+.itc-overview .itc-summary article small { margin-top: 2px; overflow: hidden; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.itc-overview .itc-filters { display: contents; }
+.itc-overview .itc-filters label {
+  display: grid;
+  min-width: 0;
+  align-content: stretch;
+  gap: 3px;
+}
+.itc-overview .itc-filters label > span { font-size: 8px; line-height: 1.1; }
+.itc-overview .itc-filters .itc-search { grid-column: 4; }
+.itc-overview .itc-filters label:nth-of-type(2) { grid-column: 5; }
+.itc-overview .itc-filters input,
+.itc-overview .itc-filters select {
+  width: 100%;
+  min-width: 0;
+  min-height: 35px;
+  padding: 6px 8px;
+  font-size: 11px;
+}
+.itc-overview .itc-filters output {
+  grid-column: 6;
+  align-self: end;
+  min-width: 0;
+  margin: 0;
+  padding: 0 2px 9px 0;
+  overflow: hidden;
+  font-size: 9px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.itc-overview .itc-command-actions {
+  grid-column: 7;
+  min-width: 0;
+  align-self: end;
+  gap: 5px;
+}
+.itc-overview .itc-command-actions button {
+  min-width: 0;
+  min-height: 35px;
+  padding: 6px 7px;
+  font-size: 9px;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+.itc-overview .itc-command-actions button span { display: inline; }
+.itc-panel { min-width: 0; }
+.itc-table-wrap {
+  height: min(360px, calc(100dvh - 285px));
+  max-height: none !important;
+  min-height: 260px;
+  overflow: auto !important;
+  padding-bottom: 18px;
+  scrollbar-gutter: stable both-edges;
+}
+@media (max-width: 760px) {
+  .itc-overview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .itc-overview .itc-filters .itc-search,
+  .itc-overview .itc-filters label:nth-of-type(2),
+  .itc-overview .itc-filters output,
+  .itc-overview .itc-command-actions { grid-column: auto; }
+  .itc-overview .itc-command-actions { grid-column: 1 / -1; }
+  .itc-overview .itc-command-actions button { flex: 1 1 0; }
+  .itc-table-wrap { height: min(360px, calc(100dvh - 330px)); }
+}
