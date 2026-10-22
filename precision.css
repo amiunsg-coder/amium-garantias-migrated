@@ -4960,3 +4960,30 @@ body[data-theme="dark"] .itc-comment-form { background: var(--surface); }
   .itc-summary article strong { font-size: 19px; }
   .itc-table-wrap { max-height: calc(100dvh - 350px) !important; }
 }
+
+/* ITC: versión ultracompacta para priorizar la tabla. */
+.itc-command {
+  min-height: 58px;
+  padding: 7px 12px;
+}
+.itc-command p { display: none; }
+.itc-command > div > span { font-size: 8px; }
+.itc-command strong { margin-top: 1px; font-size: 13px; }
+.itc-command-actions { gap: 6px; }
+.itc-command-actions button {
+  min-height: 30px;
+  padding: 5px 9px;
+  font-size: 10px;
+}
+.itc-summary { gap: 6px; margin-bottom: 7px; }
+.itc-summary article {
+  min-height: 49px;
+  padding: 6px 10px;
+}
+.itc-summary article > span { font-size: 8px; }
+.itc-summary article strong { margin-top: 2px; font-size: 18px; }
+.itc-summary article small { margin-top: 2px; font-size: 8px; }
+@media (max-width: 700px) {
+  .itc-command { min-height: 54px; padding: 7px 10px; }
+  .itc-summary article { min-height: 47px; padding: 6px 8px; }
+}
