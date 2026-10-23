@@ -253,12 +253,16 @@ let amiunLastRemoteSignature = '';
 let amiunRemoteCasesMarker = '';
 let amiunRemoteAppStateMarker = '';
 let amiunLastRemoteCasesUpdatedAt = '';
-let amiunPendingCaseSync = loadStoredArray(AMIUN_PENDING_CASES_KEY,[]);
+let amiunPendingCaseSync = AMIUN_LOCAL_DEMO_MODE ? loadStoredArray(AMIUN_PENDING_CASES_KEY,[]) : [];
 let amiunPendingCaseSyncBusy = false;
 let amiunPendingSyncNoticeAt = 0;
 let amiunRecoverySnapshotBusy = false;
 let amiunRecoverySnapshotLoaded = false;
 let amiunRecoveryMode = false;
+let amiunLastCaseSnapshot = [];
+let amiunSessionCheckBusy = false;
+let amiunSessionInvalidNoticeAt = 0;
+let amiunLastSessionValidationAt = 0;
 const amiunCrossTabSyncChannel = amiunSupabaseClient && typeof BroadcastChannel === 'function'
   ? new BroadcastChannel('amiun-shared-data-live-v1')
   : null;
@@ -427,6 +431,7 @@ const stableCasesSignature = items => {
 };
 const caseOrderKey = value => String(value?.order_number||value?.order||'').trim().toUpperCase();
 function persistPendingCaseSync(){
+  if(!AMIUN_LOCAL_DEMO_MODE)return false;
   try{localStorage.setItem(AMIUN_PENDING_CASES_KEY,JSON.stringify(amiunPendingCaseSync));return true}
   catch(error){console.warn('[Datos] No se pudo guardar la cola local de sincronización',error);return false}
 }
@@ -435,6 +440,32 @@ function announcePendingCaseSync(){
   if(now-amiunPendingSyncNoticeAt<60000)return;
   amiunPendingSyncNoticeAt=now;
   if(typeof toast==='function'&&!document.body.classList.contains('auth-locked'))toast('Guardado en este equipo; pendiente de sincronización entre computadoras');
+}
+async function validateAmiunRemoteSession({force=false}={}){
+  if(!amiunSupabaseClient||!amiunCustomSessionToken)return false;
+  if(!force&&amiunLastSessionValidationAt&&Date.now()-amiunLastSessionValidationAt<120000)return true;
+  if(amiunSessionCheckBusy)return false;
+  amiunSessionCheckBusy=true;
+  try{
+    const response=await fetch(`${AMIUN_SUPABASE_URL}/rest/v1/rpc/get_app_session_user`,{headers:amiunSupabaseRestHeaders});
+    const data=response.ok?await response.json().catch(()=>null):null;
+    const storedUser=sessionStorage.getItem(AUTH_SESSION_KEY);
+    const valid=Boolean(response.ok&&data?.username&&storedUser&&String(data.username).toLowerCase()===String(storedUser).toLowerCase());
+    if(valid)amiunLastSessionValidationAt=Date.now();
+    if(!valid){
+      amiunRemoteSyncReady=false;
+      const now=Date.now();
+      if(now-amiunSessionInvalidNoticeAt>30000&&!document.body.classList.contains('auth-locked')){
+        amiunSessionInvalidNoticeAt=now;
+        toast('La sesión de Supabase venció. Volvé a ingresar para actualizar los datos.');
+        lockApplication();
+      }
+    }
+    return valid;
+  }catch(error){
+    console.warn('[Supabase] No se pudo validar la sesión remota',error);
+    return false;
+  }finally{amiunSessionCheckBusy=false}
 }
 function queuePendingCaseRows(rows=[]){
   const merged=new Map((Array.isArray(amiunPendingCaseSync)?amiunPendingCaseSync:[]).map(row=>[caseOrderKey(row),row]).filter(([key])=>key));
@@ -465,18 +496,43 @@ function pendingCaseRecords(){
     .map((row,index)=>normalizeCaseRecord(row?.payload,index))
     .filter(record=>String(record?.order||'').trim());
 }
+async function readRemoteCaseRowsByOrders(orders=[]){
+  const keys=[...new Set((Array.isArray(orders)?orders:[]).map(value=>String(value||'').trim().toUpperCase()).filter(Boolean))];
+  if(!keys.length)return [];
+  const filter=keys.map(key=>encodeURIComponent(key)).join(',');
+  const response=await fetch(`${AMIUN_SUPABASE_URL}/rest/v1/${AMIUN_CASES_TABLE}?select=order_number,payload,updated_at&order_number=in.(${filter})`,{headers:amiunSupabaseRestHeaders});
+  if(!response.ok)throw new Error(await response.text());
+  const rows=await response.json();
+  if(!Array.isArray(rows))throw new Error('Respuesta inválida de Supabase');
+  return rows.filter(row=>row?.payload&&typeof row.payload==='object');
+}
 async function flushPendingCaseSync(){
   if(!amiunSupabaseClient||amiunPendingCaseSyncBusy||!amiunPendingCaseSync.length)return false;
   amiunPendingCaseSyncBusy=true;
   const batch=amiunPendingCaseSync.map(row=>({...row,order_number:caseOrderKey(row),updated_at:row.updated_at||new Date().toISOString()}));
   try{
+    // Una cola local puede haber sido creada por una pestaña que quedó vieja.
+    // Si Supabase ya tiene una versión igual o más nueva, se descarta esa
+    // copia pendiente para no volver a pisar turnos o comentarios válidos.
+    const remoteRows=await readRemoteCaseRowsByOrders(batch.map(row=>row.order_number));
+    const remoteByOrder=new Map(remoteRows.map(row=>[caseOrderKey(row),row]));
+    const safeBatch=batch.filter(row=>{
+      const remote=remoteByOrder.get(caseOrderKey(row));
+      const remoteAt=Date.parse(remote?.updated_at||'')||0;
+      const localAt=Date.parse(row.updated_at||'')||0;
+      return !remote||!remoteAt||!localAt||localAt>remoteAt;
+    });
+    if(!safeBatch.length){
+      removePendingCaseRows(batch);
+      return true;
+    }
     const response=await fetch(`${AMIUN_SUPABASE_URL}/rest/v1/${AMIUN_CASES_TABLE}?on_conflict=order_number`,{
       method:'POST',
       headers:{...amiunSupabaseRestHeaders,Prefer:'resolution=merge-duplicates,return=minimal'},
-      body:JSON.stringify(batch)
+      body:JSON.stringify(safeBatch)
     });
     if(!response.ok)throw new Error(await response.text());
-    removePendingCaseRows(batch);
+    removePendingCaseRows(safeBatch);
     amiunRecoveryMode=false;
     amiunRemoteSyncReady=true;
     announceSharedDataChange('cases');
@@ -488,6 +544,7 @@ async function flushPendingCaseSync(){
   }finally{amiunPendingCaseSyncBusy=false}
 }
 async function loadRecoverySnapshot(){
+  if(!AMIUN_LOCAL_DEMO_MODE)return false;
   if(amiunRecoverySnapshotLoaded||amiunRecoverySnapshotBusy||(!AMIUN_LOCAL_DEMO_MODE&&cases.length))return false;
   if(AMIUN_LOCAL_DEMO_MODE && localStorage.getItem(AMIUN_LOCAL_RECOVERY_STATE_KEY)===AMIUN_LOCAL_RECOVERY_VERSION && cases.length)return false;
   amiunRecoverySnapshotBusy=true;
@@ -514,7 +571,7 @@ async function loadRecoverySnapshot(){
     amiunRecoveryMode=!AMIUN_LOCAL_DEMO_MODE;
     amiunRecoverySnapshotLoaded=true;
     refreshAutomaticStates({persist:false});
-    localStorage.setItem(AMIUN_SHARED_CASES_KEY,JSON.stringify(cases));
+    if(AMIUN_LOCAL_DEMO_MODE)localStorage.setItem(AMIUN_SHARED_CASES_KEY,JSON.stringify(cases));
     if(AMIUN_LOCAL_DEMO_MODE)localStorage.setItem(AMIUN_LOCAL_RECOVERY_STATE_KEY,AMIUN_LOCAL_RECOVERY_VERSION);
     if(typeof renderAfterRemoteSync==='function'&&!document.body.classList.contains('auth-locked'))renderAfterRemoteSync();
     if(!AMIUN_LOCAL_DEMO_MODE)toast(`Modo recuperación activo: ${cases.length} casos de la copia del 13/10`);
@@ -524,23 +581,50 @@ async function loadRecoverySnapshot(){
     return false;
   }finally{amiunRecoverySnapshotBusy=false}
 }
-async function pushSharedCasesToSupabase(sourceCases = cases, changedOrders = null) {
+async function pushSharedCasesToSupabase(sourceCases = cases, changedOrders = null, changedPatches = null) {
   const changed = changedOrders ? new Set(changedOrders.map(order=>String(order).trim().toUpperCase())) : null;
   const value = (Array.isArray(sourceCases) ? sourceCases : []).filter(item=>{
     const order=String(item?.order||'').trim().toUpperCase();
     return order&&(!changed||changed.has(order));
   });
   if(!value.length)return true;
-  const rows=value.map(item=>({
-    order_number:String(item.order).trim().toUpperCase(),
-    payload:item,
-    updated_at:new Date().toISOString()
-  }));
   if(!amiunSupabaseClient){
-    queuePendingCaseRows(rows);
+    queuePendingCaseRows(value.map(item=>({
+      order_number:String(item.order).trim().toUpperCase(),
+      payload:item,
+      updated_at:new Date().toISOString()
+    })));
     return false;
   }
+  let rows=[];
   try {
+    const remoteRows=await readRemoteCaseRowsByOrders(value.map(item=>item.order));
+    const remoteByOrder=new Map(remoteRows.map(row=>[caseOrderKey(row),row]));
+    rows=value.map(item=>{
+      const order=String(item.order).trim().toUpperCase();
+      const remote=remoteByOrder.get(order);
+      const patch=changedPatches?.get?.(order)||changedPatches?.get?.(item.order);
+      let payload=item;
+      if(remote?.payload&&patch){
+        // Aplicar únicamente los campos que cambió esta acción sobre la
+        // versión remota más reciente. Así una pestaña vieja no borra campos
+        // agregados desde otra computadora.
+        payload={...remote.payload,...(patch.set||{})};
+        (patch.deleted||[]).forEach(key=>delete payload[key]);
+        const historyById=new Map();
+        [...(Array.isArray(remote.payload.auditHistory)?remote.payload.auditHistory:[]),...(Array.isArray(item.auditHistory)?item.auditHistory:[])].forEach(entry=>{
+          const id=String(entry?.id||'');
+          if(id)historyById.set(id,entry);
+        });
+        if(historyById.size)payload.auditHistory=[...historyById.values()].sort((a,b)=>String(a?.at||'').localeCompare(String(b?.at||'')));
+        payload.order=item.order;
+        // Mantener la vista local alineada con la versión que se va a enviar.
+        // Así el siguiente guardado no vuelve a partir de un objeto obsoleto.
+        Object.keys(item).forEach(key=>delete item[key]);
+        Object.assign(item,payload);
+      }
+      return {order_number:order,payload,updated_at:new Date().toISOString()};
+    });
     const response = await fetch(`${AMIUN_SUPABASE_URL}/rest/v1/${AMIUN_CASES_TABLE}?on_conflict=order_number`, {
       method: 'POST',
       headers: {
@@ -552,12 +636,18 @@ async function pushSharedCasesToSupabase(sourceCases = cases, changedOrders = nu
     if(!response.ok)throw new Error(await response.text());
     removePendingCaseRows(rows);
     amiunLastRemoteSignature = stableCasesSignature(sourceCases);
+    amiunLastCaseSnapshot=sourceCases.map(item=>JSON.parse(JSON.stringify(item)));
     amiunRemoteSyncReady = true;
     amiunRecoveryMode = false;
     announceSharedDataChange('cases');
     return true;
   } catch(error) {
-    queuePendingCaseRows(rows);
+    const fallbackRows=rows.length?rows:value.map(item=>({
+      order_number:String(item.order).trim().toUpperCase(),
+      payload:item,
+      updated_at:new Date().toISOString()
+    }));
+    queuePendingCaseRows(fallbackRows);
     console.warn('[Supabase] No se pudo guardar la base compartida', error);
     return false;
   }
@@ -565,6 +655,7 @@ async function pushSharedCasesToSupabase(sourceCases = cases, changedOrders = nu
 async function pullSharedCasesFromSupabase({full=false}={}) {
   if(!amiunSupabaseClient || amiunRemotePullBusy)return false;
   amiunRemotePullBusy = true;
+  let authError=false;
   try {
     // Después de la primera carga solo pedimos filas nuevas o modificadas.
     // Realtime cubre los cambios normales; la carga completa queda como respaldo.
@@ -573,27 +664,53 @@ async function pullSharedCasesFromSupabase({full=false}={}) {
     const response = await fetch(`${AMIUN_SUPABASE_URL}/rest/v1/${AMIUN_CASES_TABLE}?select=order_number,payload,updated_at&order=updated_at.asc${since}`, {
       headers: amiunSupabaseRestHeaders
     });
-    if(!response.ok)throw new Error(await response.text());
+    if(!response.ok){
+      authError=response.status===401||response.status===403;
+      throw new Error(await response.text());
+    }
     const rows = await response.json();
     if(!Array.isArray(rows))throw new Error('Respuesta inválida de Supabase');
     const dataRows = (Array.isArray(rows) ? rows : []).filter(row=>!isRemoteCaseLockRow(row));
     const remoteCases = dataRows.map(row=>row?.payload).filter(item=>item&&typeof item==='object').map(normalizeCaseRecord);
     dataRows.forEach(row=>{if(row.updated_at && row.updated_at>amiunLastRemoteCasesUpdatedAt)amiunLastRemoteCasesUpdatedAt=row.updated_at});
     if(!full && amiunRemoteSyncReady && !remoteCases.length){
+      // Una lectura incremental vacía es normal, pero también es exactamente
+      // lo que puede devolver RLS con una sesión vencida. La validación está
+      // cacheada por dos minutos para evitar una llamada extra en cada ciclo.
+      const sessionValid=await validateAmiunRemoteSession();
+      if(!sessionValid)return false;
       amiunRemoteSyncReady=true;
       return true;
     }
-    // Una respuesta vacía puede ser causada por RLS, una cuota agotada o una
-    // lectura parcial. Si todavía tenemos datos locales, conservarlos evita
-    // que una falla transitoria se convierta en una aparente eliminación.
+    // Una respuesta vacía durante la carga completa normalmente significa que
+    // la sesión venció o que RLS rechazó la lectura. Validamos la sesión antes
+    // de conservar una copia local, para no mostrar datos viejos como si fueran
+    // el estado actual ni permitir que luego se vuelvan a subir.
+    if(!remoteCases.length&&(full||!amiunRemoteSyncReady)){
+      const sessionValid=await validateAmiunRemoteSession({force:true});
+      if(!sessionValid)return false;
+    }
+    // Si la sesión es válida, una respuesta vacía puede ser una falla
+    // transitoria o una base realmente vacía. Si todavía tenemos datos locales,
+    // conservarlos evita que una falla de lectura se convierta en una aparente
+    // eliminación, pero la sincronización queda bloqueada hasta confirmarla.
     if(!remoteCases.length && cases.length){
+      if(!AMIUN_LOCAL_DEMO_MODE){
+        amiunRemoteSyncReady=false;
+        toast('No se pudo confirmar la información de Supabase. Volvé a iniciar sesión.');
+        lockApplication();
+        return false;
+      }
       console.warn('[Supabase] Respuesta vacía; se conserva la última copia local de casos');
       amiunRemoteSyncReady = false;
       return false;
     }
     if(!remoteCases.length){
       amiunRemoteSyncReady = false;
-      return await loadRecoverySnapshot();
+      if(AMIUN_LOCAL_DEMO_MODE)return await loadRecoverySnapshot();
+      toast('No se pudo confirmar la información de Supabase. Volvé a iniciar sesión.');
+      lockApplication();
+      return false;
     }
     // Las altas y ediciones hechas mientras Supabase estaba restringido viven
     // en la cola local. Se muestran junto con la copia remota y se intentan
@@ -636,11 +753,12 @@ async function pullSharedCasesFromSupabase({full=false}={}) {
     refreshAutomaticStates({persist:false});
     const remoteSignature = stableCasesSignature(cases);
     if(remoteSignature !== localSignature) {
-      localStorage.setItem(AMIUN_SHARED_CASES_KEY, JSON.stringify(cases));
+      if(AMIUN_LOCAL_DEMO_MODE)localStorage.setItem(AMIUN_SHARED_CASES_KEY, JSON.stringify(cases));
       if(typeof renderAfterRemoteSync === 'function' && !document.body.classList.contains('auth-locked')) renderAfterRemoteSync();
       toast('Base de datos sincronizada con Supabase');
     }
     amiunLastRemoteSignature = remoteSignature;
+    amiunLastCaseSnapshot=cases.map(item=>JSON.parse(JSON.stringify(item)));
     amiunRemoteSyncReady = true;
     amiunRecoveryMode = false;
     if(pending.length)void flushPendingCaseSync();
@@ -648,10 +766,14 @@ async function pullSharedCasesFromSupabase({full=false}={}) {
   } catch(error) {
     console.warn('[Supabase] No se pudo leer la base compartida', error);
     amiunRemoteSyncReady = false;
+    if(authError)return false;
     // Si el servicio devuelve 402 por cuota, servimos la última exportación
     // incluida en Vercel. Esto permite consultar y seguir cargando datos sin
     // tocar ni reemplazar la base original.
-    return await loadRecoverySnapshot();
+    if(AMIUN_LOCAL_DEMO_MODE)return await loadRecoverySnapshot();
+    toast('Supabase no está disponible. No se mostrarán datos antiguos.');
+    lockApplication();
+    return false;
   } finally {
     amiunRemotePullBusy = false;
   }
@@ -742,9 +864,12 @@ async function probeRemoteChanges({force=false}={}){
   }catch(error){console.warn('[Sincronización] No se pudo comprobar si hay cambios nuevos',error)}
   finally{amiunRemoteProbeBusy=false}
 }
-function startSharedCasesSync() {
-  if(!amiunSupabaseClient || amiunRemoteSyncTimer)return;
-  pullSharedCasesFromSupabase({full:true});
+async function startSharedCasesSync() {
+  if(!amiunSupabaseClient)return false;
+  if(amiunRemoteSyncTimer)return amiunRemoteSyncReady;
+  // La primera lectura debe terminar antes de mostrar la interfaz. Así una
+  // copia de localStorage nunca aparece como si fuera la base actual.
+  const initialPull=pullSharedCasesFromSupabase({full:true});
   pullUserDirectory();
   pullUserPermissions();
   pullPartsOrderEmailSettings();
@@ -766,6 +891,8 @@ function startSharedCasesSync() {
   probeRemoteChanges();
   window.addEventListener('focus', ()=>probeRemoteChanges({force:true}));
   window.addEventListener('online', ()=>probeRemoteChanges({force:true}));
+  await initialPull;
+  return amiunRemoteSyncReady;
 }
 const normalizeCaseRecord = (record,index) => {
   const source = record && typeof record === 'object' ? record : {};
@@ -833,19 +960,19 @@ if(localStorage.getItem('amiun-data-reset-version')!==AMIUN_DATA_RESET_VERSION){
   ].forEach(key=>localStorage.removeItem(key));
   localStorage.setItem('amiun-data-reset-version',AMIUN_DATA_RESET_VERSION);
 }
-// En producción, `warranty-cases` es la última copia disponible si Supabase
-// no responde. Nunca se debe vaciar al iniciar la aplicación.
+// En producción los casos operativos solo provienen de Supabase. La copia
+// local se usa únicamente para la vista de demostración abierta desde el equipo.
 localStorage.removeItem(IMPORT_SEED_STATE_KEY);
 localStorage.removeItem(demoQuarterKey);
 localStorage.removeItem(augustPendingDemoKey);
-const cachedSharedCases = loadStoredArray(AMIUN_SHARED_CASES_KEY,[])
+const cachedSharedCases = (AMIUN_LOCAL_DEMO_MODE ? loadStoredArray(AMIUN_SHARED_CASES_KEY,[]) : [])
   .filter(item=>item&&typeof item==='object'&&String(item.order||'').trim())
   .map((item,index)=>normalizeCaseRecord(item,index));
 // En la primera apertura local se importa la recuperación. Luego se conserva
 // la copia del navegador para que los cambios locales sigan disponibles.
-let cases = cachedSharedCases;
+let cases = AMIUN_LOCAL_DEMO_MODE ? cachedSharedCases : [];
 const caseBranchMigrationNeeded=!localStorage.getItem(CASE_BRANCH_MIGRATION_KEY);
-if(caseBranchMigrationNeeded){
+if(caseBranchMigrationNeeded&&AMIUN_LOCAL_DEMO_MODE){
   cases.forEach(record=>{record.branch='Santa Fe'});
   localStorage.setItem(CASE_BRANCH_MIGRATION_KEY,'done');
   localStorage.setItem(AMIUN_SHARED_CASES_KEY,JSON.stringify(cases));
@@ -1215,7 +1342,8 @@ function manualAuditChanges(changes=[]){
 function save(){
   let previous=[];
   const changedOrders=new Set();
-  try{previous=JSON.parse(localStorage.getItem('warranty-cases')||'[]')}catch(error){previous=[]}
+  const changedPatches=new Map();
+  try{previous=AMIUN_LOCAL_DEMO_MODE?JSON.parse(localStorage.getItem('warranty-cases')||'[]'):amiunLastCaseSnapshot.map(item=>JSON.parse(JSON.stringify(item)))}catch(error){previous=[]}
   const previousByOrder=new Map(previous.map(item=>[item.order,item]));
   cases.forEach((current,currentIndex)=>{
     const before=previousByOrder.get(current.order),isNew=!before;
@@ -1235,25 +1363,32 @@ function save(){
     });
     if(!changes.length)return;
     changedOrders.add(current.order);
+    const patch=changedPatches.get(current.order)||{set:{},deleted:[]};
+    changes.forEach(change=>{
+      if(Object.prototype.hasOwnProperty.call(current,change.key))patch.set[change.key]=current[change.key];
+      else if(!patch.deleted.includes(change.key))patch.deleted.push(change.key);
+    });
+    // El historial se combina por id al enviar para conservar eventos hechos
+    // desde otra pestaña o computadora.
+    patch.set.auditHistory=current.auditHistory;
+    changedPatches.set(current.order,patch);
     if(AMIUN_LOCAL_DEMO_MODE)current.updatedAt=new Date().toISOString();
     const history=Array.isArray(current.auditHistory)?current.auditHistory:[],manualChanges=manualAuditChanges(changes);
     if(!isNew&&!manualChanges.length)return;
     current.auditHistory=[...history,{id:`AUD-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,at:new Date().toISOString(),user:auditActor(),action:auditAction(manualChanges,isNew),changes:isNew?[]:manualChanges}];
   });
-  localStorage.setItem('warranty-cases',JSON.stringify(cases));
+  if(AMIUN_LOCAL_DEMO_MODE)localStorage.setItem('warranty-cases',JSON.stringify(cases));
   if(!changedOrders.size)return;
   // Mientras la sesión todavía no terminó de traer la base remota, no enviar
   // una copia local potencialmente vieja como si fuera la fuente de verdad.
   // Las acciones hechas por un usuario durante esa ventana quedan en la cola
   // y se sincronizan después de la primera lectura remota.
   if(amiunSupabaseClient&&!amiunRemoteSyncReady){
-    if(currentApplicationUser()){
-      const pendingRows=[...changedOrders].map(order=>({order_number:String(order).trim().toUpperCase(),payload:cases.find(item=>item.order===order),updated_at:new Date().toISOString()})).filter(row=>row.payload);
-      queuePendingCaseRows(pendingRows);
-    }
+    toast('Supabase no está disponible. El cambio no se guardó; volvé a intentar cuando la conexión esté activa.');
+    lockApplication();
     return;
   }
-  pushSharedCasesToSupabase(cases,[...changedOrders]);
+  pushSharedCasesToSupabase(cases,[...changedOrders],changedPatches);
 }
 const saveRegistry = (replaceRemote=false) => {
   manualPartsRegistry=normalizeManualPartsRegistry(manualPartsRegistry);
@@ -2710,7 +2845,7 @@ async function updateDatabaseCase(order,form){
     c.auditHistory=[...previous.auditHistory,{id:`AUD-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,at:new Date().toISOString(),user:auditActor(),action:'Datos del caso actualizados',changes:manualAuditChanges(changes)}];
     const renamed=await renameCaseInSupabase(order,c);
     if(!renamed){Object.keys(c).forEach(key=>delete c[key]);Object.assign(c,previous);toast(`No se pudo cambiar el NRO OR ${order}`);renderKeepingTablePosition();return}
-    localStorage.setItem('warranty-cases',JSON.stringify(cases));
+    if(AMIUN_LOCAL_DEMO_MODE)localStorage.setItem('warranty-cases',JSON.stringify(cases));
     releaseCaseLock(order);
     selectedDatabaseOrder=nextOrder;
     await acquireCaseLock(nextOrder,'Base de datos');
@@ -3801,7 +3936,7 @@ render=function(){
 let loginAttempts=0,loginBlockedUntil=0;
 function finishApplicationBoot(){document.documentElement.classList.remove('app-booting');document.getElementById('appBootScreen')?.setAttribute('hidden','')}
 async function credentialHash(value){const data=new TextEncoder().encode(value),digest=await crypto.subtle.digest('SHA-256',data);return [...new Uint8Array(digest)].map(byte=>byte.toString(16).padStart(2,'0')).join('')}
-function unlockApplication(username){const user=APPLICATION_USERS[username];if(!user||user.active===false){lockApplication();return}sessionStorage.setItem(AUTH_SESSION_KEY,user.username);if(!canAccessView(currentView,user))currentView=defaultViewForCurrentUser(user);loginScreen.hidden=true;appShell.hidden=false;document.body.classList.remove('auth-locked');loginError.textContent='';loginForm.reset();updateSessionIdentity(user);startSharedCasesSync();render();finishApplicationBoot();setTimeout(()=>{document.getElementById('globalSearch')?.focus();checkDueReminderAlerts()},0)}
+async function unlockApplication(username){const user=APPLICATION_USERS[username];if(!user||user.active===false){lockApplication();return}sessionStorage.setItem(AUTH_SESSION_KEY,user.username);if(!canAccessView(currentView,user))currentView=defaultViewForCurrentUser(user);document.body.classList.remove('auth-locked');loginError.textContent=amiunSupabaseClient?'Sincronizando datos…':'';loginForm.reset();updateSessionIdentity(user);if(amiunSupabaseClient){appShell.hidden=true;loginScreen.hidden=false;const synced=await startSharedCasesSync();if(!synced){lockApplication();return}}loginScreen.hidden=true;appShell.hidden=false;loginError.textContent='';render();finishApplicationBoot();setTimeout(()=>{document.getElementById('globalSearch')?.focus();checkDueReminderAlerts()},0)}
 function lockApplication(){sessionStorage.removeItem(AUTH_SESSION_KEY);updateAmiunRestAuthorization(null);appShell.hidden=true;loginScreen.hidden=false;document.body.classList.add('auth-locked');loginForm.reset();loginError.textContent='';toggleLoginPassword.textContent='Mostrar';toggleLoginPassword.setAttribute('aria-label','Mostrar contraseña');loginPassword.type='password';finishApplicationBoot();setTimeout(()=>loginUsername.focus(),0)}
 toggleLoginPassword.onclick=()=>{const reveal=loginPassword.type==='password';loginPassword.type=reveal?'text':'password';toggleLoginPassword.textContent=reveal?'Ocultar':'Mostrar';toggleLoginPassword.setAttribute('aria-label',reveal?'Ocultar contraseña':'Mostrar contraseña')};
 async function authenticateApplicationUser(username,password){
