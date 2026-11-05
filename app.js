@@ -3468,10 +3468,7 @@ function bottleneckComparison(partsArea,turnsArea){
   const delayed=principal.buckets[2].items.length+principal.buckets[3].items.length;
   const stateKey=principal.buckets[3].items.length?'critical':principal.buckets[2].items.length?'risk':principal.buckets[1].items.length?'watch':'ok';
   const stateLabel={critical:'Crítico',risk:'Riesgo',watch:'Seguimiento',ok:'Controlado'}[stateKey];
-  return `<div class="summary-comparison-grid">
-    <section class="summary-focus-panel ${stateKey}"><span>CUELLO PRINCIPAL</span><div><strong>${principal.label}</strong><b>${stateLabel}</b></div><p>${delayed} ${delayed===1?'caso fuera':'casos fuera'} del flujo esperado. Máxima antigüedad: ${principal.maximum} días hábiles.</p><button type="button" class="primary-button" data-summary-mode="${principal.mode}">Ver casos</button></section>
-    <section class="summary-comparison-panel"><header><div><h2>Comparación por antigüedad</h2><p>Lectura conjunta del trabajo pendiente</p></div></header><div class="table-wrap"><table class="summary-comparison-table"><thead><tr><th>ÁREA</th><th>0 a 7</th><th>8 a 14</th><th>15 a 21</th><th>22+</th><th>TOTAL</th></tr></thead><tbody>${[partsArea,turnsArea].map(area=>`<tr><th>${area.label}</th>${area.buckets.map(bucket=>`<td class="${bucket.key}">${bucket.items.length}</td>`).join('')}<td><strong>${area.items.length}</strong></td></tr>`).join('')}</tbody></table></div></section>
-  </div>`;
+  return `<section class="summary-comparison-panel summary-secondary-panel"><header><div><span class="summary-detail-kicker">DETALLE SECUNDARIO</span><h2>Comparación por antigüedad</h2><p>Lectura conjunta del trabajo pendiente</p></div><span class="summary-detail-badge">${delayed} ${delayed===1?'caso':'casos'} fuera de flujo · ${stateLabel}</span></header><div class="table-wrap"><table class="summary-comparison-table"><thead><tr><th>ÁREA</th><th>0 a 7</th><th>8 a 14</th><th>15 a 21</th><th>22+</th><th>TOTAL</th></tr></thead><tbody>${[partsArea,turnsArea].map(area=>`<tr><th>${area.label}</th>${area.buckets.map(bucket=>`<td class="${bucket.key}">${bucket.items.length}</td>`).join('')}<td><strong>${area.items.length}</strong></td></tr>`).join('')}</tbody></table></div></section>`;
 }
 function bottleneckDashboard(partsArea,turnsArea){
   const critical=partsArea.buckets[3].items.length+turnsArea.buckets[3].items.length;
