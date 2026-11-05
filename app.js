@@ -2485,7 +2485,7 @@ async function createItcCase(form){
   if(!/^\d{4,}$/.test(id)){form.elements.id.focus();toast('El ID debe tener 4 dígitos o más.');return}
   if(itcCaseById(id)){form.elements.id.focus();toast('Ese ID ya está registrado. Elegí otro número.');return}
   const now=new Date().toISOString();
-  const item=normalizeItcCase({id,date:String(data.get('date')||iso(0)),createdAt:now,updatedAt:now,priority:data.get('priority'),vin,responsible:'Toyota',status:'Activo',closedAt:'',resolution:'',comments:[{at:now,authorOrg:'Amiun',text}]});
+  const item=normalizeItcCase({id,branch:currentApplicationUser()?.branch||'Santa Fe',date:String(data.get('date')||iso(0)),createdAt:now,updatedAt:now,priority:data.get('priority'),vin,responsible:'Toyota',status:'Activo',closedAt:'',resolution:'',comments:[{at:now,authorOrg:'Amiun',text}]});
   itcCases.unshift(item);
   saveItcCases();
   const remoteSaved=await upsertItcRemoteCase(item);
