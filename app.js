@@ -3457,10 +3457,11 @@ function bottleneckRangeCard(bucket,total){
 }
 function bottleneckLane(area){
   const segments=area.buckets.map(bucket=>{const width=area.items.length?bucket.items.length/area.items.length*100:25;return `<i class="${bucket.key}" style="width:${width}%" title="${bucket.label}: ${bucket.items.length}"></i>`}).join('');
+  const labels=area.buckets.map(bucket=>`<span class="${bucket.key}"><i aria-hidden="true"></i><b>${bucket.label}</b><small>${bucket.items.length} ${bucket.items.length===1?'caso':'casos'}</small></span>`).join('');
   return `<section class="summary-bottleneck-lane">
     <header><div class="summary-area-mark">${area.shortLabel}</div><div><h2>${area.label}</h2><p>${area.items.length} ${area.items.length===1?'caso pendiente':'casos pendientes'} · máximo ${area.maximum} días hábiles</p></div><button type="button" class="text-button" data-summary-mode="${area.mode}">Ver detalle</button></header>
     <div class="bottleneck-range-grid">${area.buckets.map(bucket=>bottleneckRangeCard(bucket,area.items.length)).join('')}</div>
-    <div class="summary-distribution" aria-label="Distribución de ${area.label}">${segments}</div>
+    <div class="summary-distribution" aria-label="Distribución de ${area.label}">${segments}</div><div class="summary-distribution-legend" aria-label="Detalle de ${area.label}">${labels}</div>
   </section>`;
 }
 function bottleneckComparison(partsArea,turnsArea){
@@ -3471,7 +3472,7 @@ function bottleneckComparison(partsArea,turnsArea){
   return `<section class="summary-comparison-panel summary-secondary-panel"><header><div><span class="summary-detail-kicker">DETALLE SECUNDARIO</span><h2>Comparación por antigüedad</h2><p>Lectura conjunta del trabajo pendiente</p></div><span class="summary-detail-badge">${delayed} ${delayed===1?'caso':'casos'} fuera de flujo · ${stateLabel}</span></header><div class="table-wrap"><table class="summary-comparison-table"><thead><tr><th>ÁREA</th><th>0 a 7</th><th>8 a 14</th><th>15 a 21</th><th>22+</th><th>TOTAL</th></tr></thead><tbody>${[partsArea,turnsArea].map(area=>`<tr><th>${area.label}</th>${area.buckets.map(bucket=>`<td class="${bucket.key}">${bucket.items.length}</td>`).join('')}<td><strong>${area.items.length}</strong></td></tr>`).join('')}</tbody></table></div></section>`;
 }
 function bottleneckDashboard(partsArea,turnsArea){
-  return `<div class="summary-bottleneck-grid summary-bottleneck-grid-expanded">${bottleneckLane(partsArea)}${bottleneckLane(turnsArea)}</div><div class="summary-range-legend"><span class="fresh">0 a 7 · En flujo</span><span class="watch">8 a 14 · Seguimiento</span><span class="risk">15 a 21 · Riesgo</span><span class="critical">22+ · Acción inmediata</span></div>${bottleneckComparison(partsArea,turnsArea)}`;
+  return `<div class="summary-bottleneck-grid summary-bottleneck-grid-expanded">${bottleneckLane(partsArea)}${bottleneckLane(turnsArea)}</div>${bottleneckComparison(partsArea,turnsArea)}`;
 }
 dashboardV2=function(){
   const scoped=summaryActiveCases();
