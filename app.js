@@ -1002,7 +1002,7 @@ sessionStorage.setItem(CASE_LOCK_TAB_KEY,caseLockTabId);
 let activeCaseLockOrder='';
 const pendingCaseLockOrders=new Set();
 let currentView = 'dashboard';
-let settingsPanel = 'email';
+let settingsPanel = 'password';
 let query = '';
 let managedOrder = '';
 let turnFilter = 'all';
@@ -2317,7 +2317,6 @@ function settingsView(){
         <div class="settings-nav-intro"><span class="action-kicker">PANEL DE CONTROL</span><p>Elegí una sección para mostrar solo sus opciones.</p></div>
         <div class="settings-nav-list">
           ${menu('password','Mi contraseña','Cambiar tu acceso','CL')}
-          ${menu('email','Destinatarios de pedidos','Correos de repuestos','@')}
           ${menu('registry','Responsables','Registro de repuestos','RR')}
           ${menu('permissions','Accesos por usuario','Permisos actuales','AC')}
           ${menu('users','Administrar usuarios','Altas y bajas','US')}
@@ -2336,18 +2335,6 @@ function settingsView(){
         <label><span>REPETIR NUEVA CONTRASEÑA</span><input name="confirmPassword" type="password" autocomplete="new-password" minlength="4" required></label>
         <p class="password-settings-error" role="alert" aria-live="assertive"></p>
         <footer><span>La contraseña se guarda como hash y nunca se muestra en la aplicación.</span><button class="primary-button" type="submit">Guardar contraseña</button></footer>
-      </form>
-    </section>
-    <section id="settings-panel-email" class="settings-panel parts-email-settings" aria-labelledby="partsEmailSettingsTitle"${panel('email')}>
-      <header>
-        <div><span class="action-kicker">Solicitud de repuestos</span><h2 id="partsEmailSettingsTitle">Destinatarios del pedido</h2><p>Estos correos se usarán al presionar <strong>Pedir</strong> en la sección Repuestos.</p></div>
-        <span class="parts-email-status"><i aria-hidden="true"></i>${partsOrderEmailSettings.to.length?'Configuración activa':'Configuración pendiente'}</span>
-      </header>
-      <form id="partsOrderEmailSettingsForm" class="parts-email-settings-form">
-        <label><span>DESTINATARIOS <b>OBLIGATORIO</b></span><textarea name="to" rows="3" placeholder="repuestos@empresa.com; compras@empresa.com" required>${escapeHtml(partsOrderEmailSettings.to.join('; '))}</textarea><small>Quienes deben gestionar el pedido. Separá varios correos con punto y coma o coma.</small></label>
-        <label><span>CON COPIA (CC)</span><textarea name="cc" rows="3" placeholder="garantias@empresa.com; seguimiento@empresa.com">${escapeHtml(partsOrderEmailSettings.cc.join('; '))}</textarea><small>Personas que recibirán una copia informativa del pedido.</small></label>
-        <p class="parts-email-settings-error" role="alert" aria-live="assertive"></p>
-        <footer><div><strong>${partsOrderEmailSettings.to.length}</strong> destinatario${partsOrderEmailSettings.to.length===1?'':'s'} · <strong>${partsOrderEmailSettings.cc.length}</strong> copia${partsOrderEmailSettings.cc.length===1?'':'s'}</div><button class="primary-button" type="submit">Guardar destinatarios</button></footer>
       </form>
     </section>
     <section id="settings-panel-users" class="settings-panel user-directory-panel" aria-labelledby="usersTitle"${panel('users')}>
@@ -2953,7 +2940,6 @@ function bindSettings(){
   };
   if(passwordSelect)void refreshPasswordTargetUsers();
   const clear=document.getElementById('clearAllData');if(clear)clear.onclick=clearAllData;
-  const emailForm=document.getElementById('partsOrderEmailSettingsForm');if(emailForm)emailForm.onsubmit=async event=>{event.preventDefault();if(!canModifyView('settings')){toast('Tu perfil permite consultar Configuración, pero no modificar destinatarios.');return}const data=new FormData(emailForm),rawTo=splitEmailAddresses(data.get('to')),rawCc=splitEmailAddresses(data.get('cc')),invalid=[...rawTo,...rawCc].filter(address=>!validEmailAddress(address)),error=emailForm.querySelector('.parts-email-settings-error'),button=emailForm.querySelector('[type="submit"]');if(!rawTo.length){error.textContent='Ingresá al menos un destinatario para los pedidos de repuestos.';emailForm.elements.to.focus();return}if(invalid.length){error.textContent=`Revisá ${invalid.join(', ')}: no parece un correo válido.`;return}partsOrderEmailSettings=normalizePartsOrderEmailSettings({to:rawTo,cc:rawCc});error.textContent='';button.disabled=true;button.textContent='Guardando…';const shared=await pushPartsOrderEmailSettings();toast(shared?'Destinatarios de pedidos guardados':'Destinatarios guardados en este navegador; no se pudieron compartir');render()};
   const responsibleForm=document.getElementById('registryResponsiblesForm'),responsibleList=responsibleForm?.querySelector('[data-responsible-list]'),responsibleError=responsibleForm?.querySelector('.registry-responsibles-error');
   const renumberResponsibleRows=()=>responsibleList?.querySelectorAll('.registry-responsible-row').forEach((row,index)=>{row.querySelector(':scope > span').textContent=String(index+1).padStart(2,'0');const input=row.querySelector('input');input.setAttribute('aria-label',`Nombre del responsable ${index+1}`)});
   const bindResponsibleRemove=button=>button.onclick=()=>{if(responsibleList.querySelectorAll('.registry-responsible-row').length===1){responsibleError.textContent='Debe quedar al menos un responsable disponible.';return}button.closest('.registry-responsible-row').remove();responsibleError.textContent='';renumberResponsibleRows()};
