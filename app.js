@@ -312,12 +312,10 @@ async function pullPartsOrderEmailSettings(){
     return true;
   }catch(error){console.warn('[Configuración] No se pudieron leer los destinatarios compartidos de Repuestos',error);return false}
 }
-const normalizeRegistryResponsibles=value=>{
-  const source=Array.isArray(value)?value:Array.isArray(value?.items)?value.items:[];
-  const unique=new Map();
-  source.forEach(item=>{const name=String(item||'').trim().replace(/\s+/g,' ');if(name&&!unique.has(name.toLocaleLowerCase('es')))unique.set(name.toLocaleLowerCase('es'),name)});
-  return [...unique.values()].sort((a,b)=>a.localeCompare(b,'es',{sensitivity:'base'}));
-};
+const REGISTRY_BRANCHES=['Reconquista','Rafaela','Santa Fe'];
+const normalizeRegistryResponsibles=value=>{const source=Array.isArray(value)?value:Array.isArray(value?.items)?value.items:[];const unique=new Map();source.forEach(item=>{const raw=item&&typeof item==='object'?item:{};const name=String(raw.name??item??'').trim().replace(/\s+/g,' '),branch=REGISTRY_BRANCHES.includes(raw.branch)?raw.branch:'Santa Fe';const key=`${branch}::${name.toLocaleLowerCase('es')}`;if(name&&!unique.has(key))unique.set(key,{name,branch})});return [...unique.values()].sort((a,b)=>a.branch.localeCompare(b.branch,'es')||a.name.localeCompare(b.name,'es',{sensitivity:'base'}))};
+const registryResponsiblesForUser=(user=currentApplicationUser())=>{const visible=typeof canViewOtherBranches==='function'&&canViewOtherBranches(user)?null:(user?.branch||'Santa Fe');return registryResponsibles.filter(item=>!visible||item.branch===visible)};
+const registryResponsibleNames=(user=currentApplicationUser())=>registryResponsiblesForUser(user).map(item=>item.name);
 async function pushRegistryResponsibles(){
   localStorage.setItem(REGISTRY_RESPONSIBLES_KEY,JSON.stringify(registryResponsibles));
   if(!amiunSupabaseClient)return true;
@@ -1799,7 +1797,7 @@ function reminderPopupItems(){
 function reminderStateLabel(item){return {overdue:'Vencido',today:'Hoy',upcoming:'Próximo',completed:'Completado',paused:'Pausado'}[reminderDayState(item)]}
 function reminderRelatedCase(item){const visible=branchVisibleCases(cases);return visible.find(c=>c.order===item.order)||(item.plate?visible.find(c=>c.plate===item.plate):null)}
 function reminderOptions(selected=''){
-  const names=[...new Set([...registryResponsibles,...Object.values(APPLICATION_USERS).map(user=>user.displayName||user.username)])].sort((a,b)=>a.localeCompare(b));
+  const names=[...new Set([...registryResponsibleNames(),...Object.values(APPLICATION_USERS).map(user=>user.displayName||user.username)])].sort((a,b)=>a.localeCompare(b));
   return names.map(name=>`<option value="${escapeHtml(name)}" ${name===selected?'selected':''}>${escapeHtml(name)}</option>`).join('');
 }
 function reminderFilteredItems(){
@@ -2259,7 +2257,7 @@ function partsRegistrySheet(){
   const synced=entry.automatic;
   const field=(label,name,type='text',readonly=false,required=false)=>`<label>${label}<input name="${name}" type="${type}" value="${escapeHtml(entry[name]||'')}" ${readonly?'readonly':''} ${required?'required':''}></label>`;
   const longField=(label,name,readonly=false,required=false)=>`<label class="registry-long-field">${label}<textarea name="${name}" rows="3" wrap="soft" spellcheck="false" data-registry-part-field ${readonly?'readonly':''} ${required?'required':''}>${escapeHtml(entry[name]||'')}</textarea></label>`;
-  const responsibleNames=normalizeRegistryResponsibles([...registryResponsibles,entry.responsible]);
+  const responsibleNames=[...new Set([...registryResponsibleNames(),entry.responsible].filter(Boolean))];
   const responsibleField=`<label>Responsable<select name="responsible" required><option value="">Seleccionar responsable</option>${responsibleNames.map(name=>`<option value="${escapeHtml(name)}" ${entry.responsible===name?'selected':''}>${escapeHtml(name)}</option>`).join('')}</select></label>`;
   return `<div class="case-sheet-backdrop registry-backdrop" role="dialog" aria-modal="true" aria-labelledby="registrySheetTitle">
     <aside class="case-sheet registry-sheet">
@@ -2360,11 +2358,11 @@ function settingsView(){
     <section id="settings-panel-registry" class="settings-panel registry-responsibles-settings" aria-labelledby="registryResponsiblesTitle"${panel('registry')}>
       <header>
         <div><span class="action-kicker">Registro de repuestos</span><h2 id="registryResponsiblesTitle">Responsables disponibles</h2><p>Editá los nombres que aparecen al completar un registro. La lista se comparte entre computadoras.</p></div>
-        <span class="registry-responsibles-count"><strong>${registryResponsibles.length}</strong> responsables</span>
+        <span class="registry-responsibles-count"><strong>${registryResponsiblesForUser().length}</strong> responsables</span>
       </header>
       <form id="registryResponsiblesForm" class="registry-responsibles-form">
         <div class="registry-responsibles-list" data-responsible-list>
-          ${registryResponsibles.map((name,index)=>`<div class="registry-responsible-row"><span>${String(index+1).padStart(2,'0')}</span><label><span class="sr-only">Nombre del responsable ${index+1}</span><input name="responsible" maxlength="80" value="${escapeHtml(name)}" required></label><button type="button" data-remove-responsible aria-label="Quitar ${escapeHtml(name)}">Quitar</button></div>`).join('')}
+          ${registryResponsiblesForUser().map((item,index)=>`<div class="registry-responsible-row"><span>${String(index+1).padStart(2,'0')}</span><label><span class="sr-only">Nombre del responsable ${index+1}</span><input name="responsible" maxlength="80" value="${escapeHtml(item.name)}" required></label><small>${escapeHtml(item.branch)}</small><button type="button" data-remove-responsible aria-label="Quitar ${escapeHtml(item.name)}">Quitar</button></div>`).join('')}
         </div>
         <p class="registry-responsibles-error" role="alert" aria-live="assertive"></p>
         <footer><button class="secondary-button" type="button" id="addRegistryResponsible">＋ Agregar responsable</button><div><span>Quitar un nombre de esta lista no modifica los registros históricos.</span><button class="primary-button" type="submit">Guardar responsables</button></div></footer>
@@ -2945,7 +2943,7 @@ function bindSettings(){
   const bindResponsibleRemove=button=>button.onclick=()=>{if(responsibleList.querySelectorAll('.registry-responsible-row').length===1){responsibleError.textContent='Debe quedar al menos un responsable disponible.';return}button.closest('.registry-responsible-row').remove();responsibleError.textContent='';renumberResponsibleRows()};
   responsibleList?.querySelectorAll('[data-remove-responsible]').forEach(bindResponsibleRemove);
   const addResponsible=document.getElementById('addRegistryResponsible');if(addResponsible)addResponsible.onclick=()=>{const row=document.createElement('div');row.className='registry-responsible-row';const number=document.createElement('span'),label=document.createElement('label'),input=document.createElement('input'),remove=document.createElement('button');input.name='responsible';input.maxLength=80;input.required=true;input.placeholder='Nombre y apellido';remove.type='button';remove.dataset.removeResponsible='';remove.textContent='Quitar';label.append(input);row.append(number,label,remove);responsibleList.append(row);bindResponsibleRemove(remove);renumberResponsibleRows();input.focus()};
-  if(responsibleForm)responsibleForm.onsubmit=async event=>{event.preventDefault();if(!canModifyView('settings')){toast('Tu perfil permite consultar Configuración, pero no modificar responsables.');return}const raw=new FormData(responsibleForm).getAll('responsible'),normalized=normalizeRegistryResponsibles(raw);if(!normalized.length){responsibleError.textContent='Agregá al menos un responsable antes de guardar.';responsibleForm.querySelector('input')?.focus();return}responsibleError.textContent='';const button=responsibleForm.querySelector('[type="submit"]');button.disabled=true;button.textContent='Guardando…';registryResponsibles=normalized;const shared=await pushRegistryResponsibles();toast(shared?'Responsables guardados y compartidos':'Responsables guardados en este navegador; no se pudieron compartir');render()};
+  if(responsibleForm)responsibleForm.onsubmit=async event=>{event.preventDefault();if(!canModifyView('settings')){toast('Tu perfil permite consultar Configuración, pero no modificar responsables.');return}const raw=new FormData(responsibleForm).getAll('responsible'),normalized=normalizeRegistryResponsibles(raw);if(!normalized.length){responsibleError.textContent='Agregá al menos un responsable antes de guardar.';responsibleForm.querySelector('input')?.focus();return}responsibleError.textContent='';const button=responsibleForm.querySelector('[type="submit"]');button.disabled=true;button.textContent='Guardando…';const branch=currentApplicationUser()?.branch||'Santa Fe',others=registryResponsibles.filter(item=>item.branch!==branch),scoped=normalizeRegistryResponsibles(raw.map(name=>({name,branch})));registryResponsibles=normalizeRegistryResponsibles([...others,...scoped]);const shared=await pushRegistryResponsibles();toast(shared?'Responsables guardados y compartidos':'Responsables guardados en este navegador; no se pudieron compartir');render()};
   const userSelect=document.getElementById('permissionUserSelect');if(userSelect)userSelect.onchange=()=>{selectedPermissionUser=userSelect.value;render()};
   document.querySelectorAll('[data-toggle-user]').forEach(button=>button.onclick=async()=>{const username=button.dataset.toggleUser;if(username===currentApplicationUser()?.username){toast('No podés desactivar tu propio usuario.');return}APPLICATION_USERS[username].active=APPLICATION_USERS[username].active===false;APPLICATION_USERS[username].updatedAt=new Date().toISOString();const shared=await persistUserDirectory();toast(shared?'Usuario actualizado y compartido':'Usuario actualizado en este navegador; no se pudo compartir');render()});
   document.querySelectorAll('[data-edit-user]').forEach(button=>button.onclick=()=>{selectedDirectoryUser=button.dataset.editUser;render()});
