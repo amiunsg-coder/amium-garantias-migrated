@@ -1010,6 +1010,7 @@ let partsSort = 'days-desc';
 let vorFilter = 'all';
 let summaryMode = 'bottlenecks';
 let summaryVorFilter = 'all';
+let summaryBranchFilter = 'all';
 let databaseVorFilter = 'all';
 const DATABASE_PAGE_SIZE = 100;
 let databasePage = 1;
@@ -3404,8 +3405,11 @@ function bindReportControls(){const partsButton=document.getElementById('generat
 function bindTurnViewControls(){document.querySelectorAll('[data-turn-view]').forEach(button=>button.onclick=()=>{turnFilter=button.dataset.turnView;render()});const select=document.getElementById('turnFilterSelect');if(select)select.onchange=()=>{turnFilter=select.value;render()};const sortSelect=document.getElementById('turnsSortSelect');if(sortSelect)sortSelect.onchange=()=>{turnsSort=sortSelect.value;const priority=document.getElementById('priorityFilter')?.value||'';let items=filterTurns(filtered(getViewCases('appointments')));if(priority)items=items.filter(c=>c.priority===priority);document.getElementById('caseTable').innerHTML=turnsTable(items);bindInteractiveTables()}}
 function bindPartsViewControls(){document.querySelectorAll('[data-parts-view]').forEach(button=>button.onclick=()=>{partsFilter=button.dataset.partsView;render()});const select=document.getElementById('partsFilterSelect');if(select)select.onchange=()=>{partsFilter=select.value;render()};const sortSelect=document.getElementById('partsSortSelect');if(sortSelect)sortSelect.onchange=()=>{partsSort=sortSelect.value;const priority=document.getElementById('priorityFilter')?.value||'';let items=filterParts(filtered(getViewCases('parts')));if(priority)items=items.filter(c=>c.priority===priority);document.getElementById('caseTable').innerHTML=partsTable(items);bindInteractiveTables()}}
 function summaryActiveCases(){
+  const user=currentApplicationUser(),branches=REGISTRY_BRANCHES.filter(branch=>canViewOtherBranches(user)||branch===(user?.branch||'Santa Fe')),activeBranch=branches.includes(summaryBranchFilter)?summaryBranchFilter:(branches.length>1?'all':branches[0]||'Santa Fe');
+  summaryBranchFilter=activeBranch;
+  const scoped=branchVisibleCases(cases,user).filter(item=>activeBranch==='all'||(item.branch||'Santa Fe')===activeBranch);
   return filterByToyota10(
-    filterByVor(branchVisibleCases(cases).filter(item=>item.status!=='DADO DE BAJA'&&item.status!=='REALIZADO'),summaryVorFilter),
+    filterByVor(scoped.filter(item=>item.status!=='DADO DE BAJA'&&item.status!=='REALIZADO'),summaryVorFilter),
     summaryToyota10Filter
   );
 }
@@ -3431,6 +3435,8 @@ function summaryArea(label,shortLabel,items,dateField,mode){
   return {label,shortLabel,items,dateField,mode,buckets,maximum,score};
 }
 function summaryFilters(total){
+  const user=currentApplicationUser(),branches=REGISTRY_BRANCHES.filter(branch=>canViewOtherBranches(user)||branch===(user?.branch||'Santa Fe')),canFilter=branches.length>1,activeBranch=branches.includes(summaryBranchFilter)?summaryBranchFilter:(canFilter?'all':branches[0]||'Santa Fe');
+  summaryBranchFilter=activeBranch;
   return `<div class="section-toolbar summary-toolbar summary-control-bar">
     <nav class="summary-primary-tabs" aria-label="Vistas del resumen">
       <button type="button" data-summary-mode="bottlenecks" class="${summaryMode==='bottlenecks'?'active':''}">Cuellos de botella</button>
@@ -3438,6 +3444,7 @@ function summaryFilters(total){
       <button type="button" data-summary-mode="turns" class="${summaryMode==='turns'?'active':''}">Turnos</button>
     </nav>
     <div class="summary-filter-group">
+      <label class="vor-filter-control compact summary-branch-filter-control" for="summaryBranchFilter"><span>SUCURSAL</span><select id="summaryBranchFilter" ${canFilter?'':'disabled'}><option value="all" ${activeBranch==='all'?'selected':''}>Todas</option>${branches.map(branch=>`<option value="${escapeHtml(branch)}" ${activeBranch===branch?'selected':''}>${escapeHtml(branch)}</option>`).join('')}</select></label>
       <label class="vor-filter-control compact" for="summaryVorFilter"><span>VOR</span><select id="summaryVorFilter"><option value="all" ${summaryVorFilter==='all'?'selected':''}>Todos</option><option value="with" ${summaryVorFilter==='with'?'selected':''}>Con VOR</option><option value="without" ${summaryVorFilter==='without'?'selected':''}>Sin VOR</option></select></label>
       <label class="vor-filter-control compact toyota10-filter-control" for="summaryToyota10Filter"><span>T10</span><select id="summaryToyota10Filter"><option value="all" ${summaryToyota10Filter==='all'?'selected':''}>Todos</option><option value="with" ${summaryToyota10Filter==='with'?'selected':''}>Con Toyota 10</option><option value="without" ${summaryToyota10Filter==='without'?'selected':''}>Sin Toyota 10</option></select></label>
       <span class="date-chip summary-case-count"><strong>${total}</strong> ${total===1?'caso visible':'casos visibles'}</span>
@@ -3509,7 +3516,7 @@ function bindVorViewControls(){
   if(select) select.onchange=()=>{vorFilter=select.value;render()};
   document.querySelectorAll('[data-vor-view]').forEach(button=>button.onclick=()=>{vorFilter=button.dataset.vorView;render()});
 }
-function bindSummaryControls(){document.querySelectorAll('[data-summary-mode]').forEach(button=>button.onclick=()=>{summaryMode=button.dataset.summaryMode;render()});const summaryVor=document.getElementById('summaryVorFilter');if(summaryVor)summaryVor.onchange=()=>{summaryVorFilter=summaryVor.value;render()};const databaseVor=document.getElementById('databaseVorFilter');if(databaseVor)databaseVor.onchange=()=>{databaseVorFilter=databaseVor.value;render()};const databaseBranch=document.getElementById('databaseBranchFilter');if(databaseBranch)databaseBranch.onchange=()=>{databaseBranchFilter=databaseBranch.value;render()};const summaryToyota10=document.getElementById('summaryToyota10Filter');if(summaryToyota10)summaryToyota10.onchange=()=>{summaryToyota10Filter=summaryToyota10.value;render()};const databaseToyota10=document.getElementById('databaseToyota10Filter');if(databaseToyota10)databaseToyota10.onchange=()=>{databaseToyota10Filter=databaseToyota10.value;render()};const partsToyota10=document.getElementById('partsToyota10Filter');if(partsToyota10)partsToyota10.onchange=()=>{partsToyota10Filter=partsToyota10.value;render()};const turnsToyota10=document.getElementById('turnsToyota10Filter');if(turnsToyota10)turnsToyota10.onchange=()=>{turnsToyota10Filter=turnsToyota10.value;render()}}
+function bindSummaryControls(){document.querySelectorAll('[data-summary-mode]').forEach(button=>button.onclick=()=>{summaryMode=button.dataset.summaryMode;render()});const summaryBranch=document.getElementById('summaryBranchFilter');if(summaryBranch)summaryBranch.onchange=()=>{summaryBranchFilter=summaryBranch.value;render()};const summaryVor=document.getElementById('summaryVorFilter');if(summaryVor)summaryVor.onchange=()=>{summaryVorFilter=summaryVor.value;render()};const databaseVor=document.getElementById('databaseVorFilter');if(databaseVor)databaseVor.onchange=()=>{databaseVorFilter=databaseVor.value;render()};const databaseBranch=document.getElementById('databaseBranchFilter');if(databaseBranch)databaseBranch.onchange=()=>{databaseBranchFilter=databaseBranch.value;render()};const summaryToyota10=document.getElementById('summaryToyota10Filter');if(summaryToyota10)summaryToyota10.onchange=()=>{summaryToyota10Filter=summaryToyota10.value;render()};const databaseToyota10=document.getElementById('databaseToyota10Filter');if(databaseToyota10)databaseToyota10.onchange=()=>{databaseToyota10Filter=databaseToyota10.value;render()};const partsToyota10=document.getElementById('partsToyota10Filter');if(partsToyota10)partsToyota10.onchange=()=>{partsToyota10Filter=partsToyota10.value;render()};const turnsToyota10=document.getElementById('turnsToyota10Filter');if(turnsToyota10)turnsToyota10.onchange=()=>{turnsToyota10Filter=turnsToyota10.value;render()}}
 function bindDatabasePagination(){document.querySelectorAll('[data-database-page]').forEach(button=>button.onclick=()=>{databasePage=Math.max(1,databasePage+(button.dataset.databasePage==='next'?1:-1));render()})}
 function bindCalendarControls(){document.querySelectorAll('[data-calendar-view]').forEach(button=>button.onclick=()=>{calendarMode=button.dataset.calendarView;render()});document.querySelectorAll('[data-calendar-shift]').forEach(button=>button.onclick=()=>{const step=calendarMode==='month'?31:calendarMode==='day'?1:7;calendarOffset+=Number(button.dataset.calendarShift)*step;render()});document.querySelectorAll('[data-calendar-order]').forEach(el=>el.onclick=()=>{selectedCalendarOrder=el.dataset.calendarOrder;render()});document.querySelectorAll('[data-calendar-day]').forEach(button=>button.onclick=()=>{const target=new Date(button.dataset.calendarDay+'T00:00:00');calendarOffset=Math.round((target-new Date(iso(0)+'T00:00:00'))/86400000);calendarMode='day';render()});const todayButton=document.querySelector('[data-calendar-today]');if(todayButton)todayButton.onclick=()=>{calendarOffset=0;render()};const priority=document.getElementById('calendarPriority');if(priority)priority.onchange=()=>{calendarPriority=priority.value;selectedCalendarOrder='';render()}}
 function auditTimestamp(value){
