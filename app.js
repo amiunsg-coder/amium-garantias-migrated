@@ -1420,6 +1420,7 @@ const normalizeItcCase=value=>{
   const lastComment=comments.at(-1);
   return {
     id:String(source.id||`ITC-${Date.now()}-${Math.random().toString(36).slice(2,7)}`),
+    branch:['Reconquista','Rafaela','Santa Fe'].includes(source.branch)?source.branch:'Santa Fe',
     date:String(source.date||createdAt.slice(0,10)),
     createdAt,
     updatedAt:String(source.updatedAt||createdAt),
@@ -1451,6 +1452,7 @@ const itcRemoteRequest=async(path,options={})=>{
 };
 const itcRemoteCasePayload=item=>({
   id:item.id,
+  branch:item.branch||'Santa Fe',
   case_date:item.date,
   priority:item.priority,
   vin:item.vin,
@@ -1499,7 +1501,7 @@ async function deleteItcRemoteCase(id){
 }
 async function fetchItcRemoteCases(){
   const [casesResponse,commentsResponse]=await Promise.all([
-    itcRemoteRequest(`${ITC_CASES_TABLE}?select=id,case_date,priority,vin,responsible,status,created_at,updated_at,closed_at&order=updated_at.desc`),
+    itcRemoteRequest(`${ITC_CASES_TABLE}?select=id,branch,case_date,priority,vin,responsible,status,created_at,updated_at,closed_at&order=updated_at.desc`),
     itcRemoteRequest(`${ITC_COMMENTS_TABLE}?select=id,itc_id,author_org,body,created_at&order=created_at.asc`)
   ]);
   const caseRows=await casesResponse.json(),commentRows=await commentsResponse.json();
@@ -1510,7 +1512,7 @@ async function fetchItcRemoteCases(){
     commentsByCase.set(String(row.itc_id),list);
   });
   return (Array.isArray(caseRows)?caseRows:[]).map(row=>normalizeItcCase({
-    id:row.id,date:row.case_date,createdAt:row.created_at,updatedAt:row.updated_at,
+    id:row.id,branch:row.branch,date:row.case_date,createdAt:row.created_at,updatedAt:row.updated_at,
     priority:row.priority,vin:row.vin,responsible:row.responsible,status:row.status,
     closedAt:row.closed_at,comments:commentsByCase.get(String(row.id))||[]
   }));
@@ -1548,11 +1550,12 @@ function queueItcRemoteSync(){
   clearTimeout(itcRemoteSyncTimer);
   itcRemoteSyncTimer=setTimeout(()=>syncItcCasesFromSupabase(),0);
 }
-const itcActiveCount=()=>itcCases.filter(item=>item.status==='Activo').length;
-const itcCaseById=id=>itcCases.find(item=>item.id===id);
+const itcVisibleCases=()=>canViewOtherBranches()?itcCases:itcCases.filter(item=>(item.branch||'Santa Fe')===(currentApplicationUser()?.branch||'Santa Fe'));
+const itcActiveCount=()=>itcVisibleCases().filter(item=>item.status==='Activo').length;
+const itcCaseById=id=>itcVisibleCases().find(item=>item.id===id);
 const itcFilteredCases=()=>{
   const needle=itcSearch.trim().toLowerCase();
-  return [...itcCases]
+  return [...itcVisibleCases()]
     .filter(item=>itcStatusFilter==='all'||item.status===itcStatusFilter)
     .filter(item=>!needle||[item.vin,item.vehicle,item.priority,item.responsible,item.status,item.id].some(value=>String(value||'').toLowerCase().includes(needle)))
     .sort((a,b)=>String(b.updatedAt||b.date).localeCompare(String(a.updatedAt||a.date)));
@@ -1971,7 +1974,7 @@ function itcCommentAgeDays(item,today=iso(0)){
   return Math.max(0,Math.floor((to-from)/86400000));
 }
 function pendingItcAlerts(){
-  return canAccessView('itc')?itcCases.filter(item=>item.status==='Activo'&&itcCommentAgeDays(item)>=ITC_ALERT_AFTER_DAYS).sort((a,b)=>itcCommentAgeDays(b)-itcCommentAgeDays(a)||String(a.id).localeCompare(String(b.id))):[];
+  return canAccessView('itc')?itcVisibleCases().filter(item=>item.status==='Activo'&&itcCommentAgeDays(item)>=ITC_ALERT_AFTER_DAYS).sort((a,b)=>itcCommentAgeDays(b)-itcCommentAgeDays(a)||String(a.id).localeCompare(String(b.id))):[];
 }
 function renderPendingResultAlerts(){
   const control=document.getElementById('pendingAlertControl'),button=document.getElementById('pendingAlertButton'),panel=document.getElementById('pendingAlertPanel'),count=document.getElementById('pendingAlertCount'),total=document.getElementById('pendingAlertTotal'),list=document.getElementById('pendingAlertList');
@@ -2422,7 +2425,7 @@ function itcTable(items){
   return `<div class="table-wrap itc-table-wrap"><table class="data-table itc-table"><thead><tr><th>FECHA</th><th>PRIORIDAD</th><th>VIN</th><th>DEBE RESPONDER</th><th>ESTADO</th></tr></thead><tbody>${items.map(item=>`<tr data-itc-row="${escapeHtml(item.id)}" tabindex="0" aria-label="Abrir ficha del ITC ${escapeHtml(item.id)}"><td><strong>${escapeHtml(fmtDate(item.date))}</strong><small>${escapeHtml(item.id)}</small></td><td><span class="itc-priority itc-priority-${escapeHtml(item.priority.toLowerCase())}">${escapeHtml(item.priority)}</span></td><td class="itc-vin">${escapeHtml(item.vin||'Sin VIN')}</td><td><span class="itc-owner"><i aria-hidden="true"></i>${escapeHtml(item.responsible)}</span></td><td><span class="itc-status ${itcStatusClass(item.status)}">${escapeHtml(item.status)}</span></td></tr>`).join('')}</tbody></table></div>`;
 }
 function itcSummary(items){
-  const active=itcCases.filter(item=>item.status==='Activo'),waitingToyota=active.filter(item=>item.responsible==='Toyota').length,waitingAmiun=active.filter(item=>item.responsible==='Amiun').length;
+  const active=itcVisibleCases().filter(item=>item.status==='Activo'),waitingToyota=active.filter(item=>item.responsible==='Toyota').length,waitingAmiun=active.filter(item=>item.responsible==='Amiun').length;
   return `<section class="itc-summary" aria-label="Resumen de ITC"><article><span>CASOS ACTIVOS TOTAL</span><strong>${active.length}</strong><small>Requieren seguimiento</small></article><article><span>POR RESPONDER TOYOTA</span><strong>${waitingToyota}</strong><small>Última acción de Amiun</small></article><article><span>POR RESPONDER AMIUN</span><strong>${waitingAmiun}</strong><small>Última acción de Toyota</small></article></section>`;
 }
 function itcDetailSheet(){
@@ -2432,7 +2435,7 @@ function itcDetailSheet(){
   return `<div class="itc-sheet-backdrop" role="dialog" aria-modal="true" aria-labelledby="itcSheetTitle"><aside class="itc-sheet"><header class="itc-sheet-header"><div class="itc-sheet-mark" aria-hidden="true"><span>TOYOTA</span><small>ITC</small></div><div><span>FICHA DE SEGUIMIENTO</span><h2 id="itcSheetTitle">${escapeHtml(item.id)}</h2><p>Conversación operativa entre Amiun y Toyota</p></div><button type="button" class="itc-close" data-itc-close aria-label="Cerrar ficha">×</button></header><form class="itc-detail-form" data-itc-detail-form="${escapeHtml(item.id)}"><section class="itc-detail-section"><header><span>01</span><div><h3>Datos del caso</h3><p>Información operativa del intercambio con Toyota.</p></div></header><div class="itc-detail-grid"><label><span>Fecha</span><input type="date" name="date" value="${escapeHtml(item.date)}" required></label><label><span>Prioridad</span><select name="priority">${ITC_PRIORITIES.map(value=>`<option value="${escapeHtml(value)}" ${item.priority===value?'selected':''}>${escapeHtml(value)}</option>`).join('')}</select></label><label class="itc-detail-vin-field"><span>VIN</span><input name="vin" maxlength="17" value="${escapeHtml(item.vin)}" placeholder="Ingresá el VIN" required></label><label class="itc-detail-status-field"><span>Estado</span><select name="status">${ITC_STATUSES.map(value=>`<option value="${escapeHtml(value)}" ${item.status===value?'selected':''}>${escapeHtml(value)}</option>`).join('')}</select></label></div><footer><span>${item.closedAt?`Cerrado el ${escapeHtml(itcDateTime(item.closedAt))}.`:'Este ITC se comparte entre usuarios y computadoras.'}</span><div class="itc-detail-footer-actions"><button type="button" class="itc-delete-button" data-itc-delete="${escapeHtml(item.id)}">Eliminar caso</button><button type="submit" class="secondary-button">Guardar datos</button></div></footer></section></form><section class="itc-detail-section itc-conversation"><header><span>02</span><div><h3>Conversación</h3><p>${comments.length?`${comments.length} ${comments.length===1?'comentario registrado':'comentarios registrados'}`:'Todavía no hay comentarios'}</p></div></header><div class="itc-comments">${comments.length?comments.map(comment=>`<article class="itc-comment ${comment.authorOrg.toLowerCase()}"><div class="itc-comment-meta"><strong>${escapeHtml(comment.authorOrg)}</strong><time>${escapeHtml(itcDateTime(comment.at))}</time></div><p>${escapeHtml(comment.text)}</p></article>`).join(''):`<div class="itc-comments-empty"><span aria-hidden="true">…</span><p>Registrá el primer mensaje para dejar trazabilidad del intercambio.</p></div>`}</div><form class="itc-comment-form" data-itc-comment-form="${escapeHtml(item.id)}"><label><span>Quién escribe la respuesta</span><select name="authorOrg">${ITC_ORGANIZATIONS.map(value=>`<option value="${escapeHtml(value)}" ${item.responsible===value?'selected':''}>${escapeHtml(value)}</option>`).join('')}</select></label><label class="itc-comment-text"><span>Comentario</span><textarea name="text" rows="4" placeholder="Escribí la consulta, respuesta o seguimiento..." required></textarea></label><div class="itc-comment-actions"><small>Después de guardar, el responsable pasa automáticamente a la otra organización.</small><button type="submit" class="primary-button">Agregar comentario</button></div></form></section></aside></div>`;
 }
 function buildItcActiveReportHtml(){
-  const active=itcCases.filter(item=>item.status==='Activo').sort((a,b)=>String(a.date||'').localeCompare(String(b.date||''))||String(a.id).localeCompare(String(b.id)));
+  const active=itcVisibleCases().filter(item=>item.status==='Activo').sort((a,b)=>String(a.date||'').localeCompare(String(b.date||''))||String(a.id).localeCompare(String(b.id)));
   const now=new Date(),logoUrl=new URL('assets/logo-amiun.png',location.href).href;
   const rows=active.map(item=>{
     const last=[...(item.comments||[])].sort((a,b)=>String(a.at||'').localeCompare(String(b.at||''))).at(-1);
