@@ -3471,15 +3471,7 @@ function bottleneckComparison(partsArea,turnsArea){
   return `<section class="summary-comparison-panel summary-secondary-panel"><header><div><span class="summary-detail-kicker">DETALLE SECUNDARIO</span><h2>Comparación por antigüedad</h2><p>Lectura conjunta del trabajo pendiente</p></div><span class="summary-detail-badge">${delayed} ${delayed===1?'caso':'casos'} fuera de flujo · ${stateLabel}</span></header><div class="table-wrap"><table class="summary-comparison-table"><thead><tr><th>ÁREA</th><th>0 a 7</th><th>8 a 14</th><th>15 a 21</th><th>22+</th><th>TOTAL</th></tr></thead><tbody>${[partsArea,turnsArea].map(area=>`<tr><th>${area.label}</th>${area.buckets.map(bucket=>`<td class="${bucket.key}">${bucket.items.length}</td>`).join('')}<td><strong>${area.items.length}</strong></td></tr>`).join('')}</tbody></table></div></section>`;
 }
 function bottleneckDashboard(partsArea,turnsArea){
-  const critical=partsArea.buckets[3].items.length+turnsArea.buckets[3].items.length;
-  const risk=partsArea.buckets[2].items.length+turnsArea.buckets[2].items.length;
-  const principal=partsArea.score===turnsArea.score?(partsArea.items.length>=turnsArea.items.length?partsArea:turnsArea):(partsArea.score>turnsArea.score?partsArea:turnsArea);
-  return `<section class="summary-bottleneck-kpis">
-    <article><span>REPUESTOS SIN ARRIBO</span><strong>${partsArea.items.length}</strong><small>requieren seguimiento</small></article>
-    <article><span>TURNOS SIN PROGRAMAR</span><strong>${turnsArea.items.length}</strong><small>clientes por coordinar</small></article>
-    <article class="${critical?'critical':''}"><span>CASOS CRÍTICOS</span><strong>${critical}</strong><small>${risk} adicionales en riesgo</small></article>
-    <article class="principal"><span>CUELLO PRINCIPAL</span><strong>${principal.label}</strong><small>${principal.maximum} días de antigüedad máxima</small></article>
-  </section><div class="summary-bottleneck-grid">${bottleneckLane(partsArea)}${bottleneckLane(turnsArea)}</div><div class="summary-range-legend"><span class="fresh">0 a 7 · En flujo</span><span class="watch">8 a 14 · Seguimiento</span><span class="risk">15 a 21 · Riesgo</span><span class="critical">22+ · Acción inmediata</span></div>${bottleneckComparison(partsArea,turnsArea)}`;
+  return `<div class="summary-bottleneck-grid summary-bottleneck-grid-expanded">${bottleneckLane(partsArea)}${bottleneckLane(turnsArea)}</div><div class="summary-range-legend"><span class="fresh">0 a 7 · En flujo</span><span class="watch">8 a 14 · Seguimiento</span><span class="risk">15 a 21 · Riesgo</span><span class="critical">22+ · Acción inmediata</span></div>${bottleneckComparison(partsArea,turnsArea)}`;
 }
 dashboardV2=function(){
   const scoped=summaryActiveCases();
